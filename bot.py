@@ -233,12 +233,12 @@ data_fetcher = BinanceDataFetcher()
 
 
 class SmartMoneyAnalyzer:
-    """Enhanced Smart Money Concept Analyzer with balanced filters"""
+    """Enhanced Smart Money Concept Analyzer with optimized filters"""
     
     def __init__(self):
         self.lookback_periods = 50
-        self.min_rr_ratio = 2.0  # Balanced R/R
-        self.volume_threshold = 1.4  # Balanced volume threshold
+        self.min_rr_ratio = 1.8  # More aggressive R/R for faster signals
+        self.volume_threshold = 1.3  # Slightly lower for more signals
         
     def detect_swing_points(self, df: pd.DataFrame) -> Tuple[List, List]:
         """Detect Swing Highs and Swing Lows"""
@@ -301,7 +301,6 @@ class SmartMoneyAnalyzer:
     def detect_order_blocks(self, df: pd.DataFrame, signal_type: str) -> Optional[Dict]:
         """Detect Order Blocks"""
         order_blocks = []
-        avg_volume = df['volume'].tail(50).mean()
         
         for i in range(len(df) - 10, len(df) - 1):
             candle = df.iloc[i]
@@ -311,7 +310,7 @@ class SmartMoneyAnalyzer:
                 # Bearish candle followed by bullish move
                 if (candle['close'] < candle['open'] and 
                     next_candle['close'] > next_candle['open'] and
-                    (next_candle['close'] - next_candle['open']) > 1.5 * abs(candle['close'] - candle['open'])):
+                    (next_candle['close'] - next_candle['open']) > 1.3 * abs(candle['close'] - candle['open'])):
                     order_blocks.append({
                         'type': 'BULLISH_OB',
                         'high': candle['high'],
@@ -324,7 +323,7 @@ class SmartMoneyAnalyzer:
                 # Bullish candle followed by bearish move
                 if (candle['close'] > candle['open'] and 
                     next_candle['close'] < next_candle['open'] and
-                    (next_candle['open'] - next_candle['close']) > 1.5 * abs(candle['close'] - candle['open'])):
+                    (next_candle['open'] - next_candle['close']) > 1.3 * abs(candle['close'] - candle['open'])):
                     order_blocks.append({
                         'type': 'BEARISH_OB',
                         'high': candle['high'],
@@ -440,32 +439,32 @@ class SmartMoneyAnalyzer:
         return recent_volume >= (avg_volume * self.volume_threshold)
     
     def check_trend_alignment(self, df: pd.DataFrame, signal_direction: str) -> bool:
-        """Check trend alignment with EMAs"""
+        """Check trend alignment with EMAs - More lenient"""
         ema_20 = self.calculate_ema(df, 20)
         ema_50 = self.calculate_ema(df, 50)
         
         current_price = df['close'].iloc[-1]
         
         if signal_direction == 'LONG':
-            # Bullish: EMA20 > EMA50 OR price > EMA20
-            return ema_20.iloc[-1] > ema_50.iloc[-1] or current_price > ema_20.iloc[-1]
+            # Bullish: price > EMA20 OR close to EMA50
+            return current_price > ema_20.iloc[-1] or current_price > (ema_50.iloc[-1] * 0.98)
         else:
-            # Bearish: EMA20 < EMA50 OR price < EMA20
-            return ema_20.iloc[-1] < ema_50.iloc[-1] or current_price < ema_20.iloc[-1]
+            # Bearish: price < EMA20 OR close to EMA50
+            return current_price < ema_20.iloc[-1] or current_price < (ema_50.iloc[-1] * 1.02)
     
     def check_momentum(self, df: pd.DataFrame, signal_direction: str) -> bool:
-        """Check momentum with RSI"""
+        """Check momentum with RSI - More lenient"""
         rsi = self.calculate_rsi(df)
         
         if signal_direction == 'LONG':
-            # For long: RSI should be between 35-75 (not extremely overbought)
-            return 35 <= rsi <= 75
+            # For long: RSI should be between 30-80
+            return 30 <= rsi <= 80
         else:
-            # For short: RSI should be between 25-65 (not extremely oversold)
-            return 25 <= rsi <= 65
+            # For short: RSI should be between 20-70
+            return 20 <= rsi <= 70
     
     async def generate_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
-        """Generate trading signal with enhanced filters"""
+        """Generate trading signal with optimized filters for faster but accurate signals"""
         try:
             df = await data_fetcher.get_ohlcv(symbol, timeframe, limit=250)
             
@@ -490,13 +489,13 @@ class SmartMoneyAnalyzer:
                 logger.debug(f"❌ {symbol} - Volume not confirmed")
                 return None
             
-            # Trend alignment
+            # Trend alignment - more lenient
             trend_aligned = self.check_trend_alignment(df, structure['signal'])
             if not trend_aligned:
                 logger.debug(f"❌ {symbol} - Trend not aligned")
                 return None
             
-            # Momentum check
+            # Momentum check - more lenient
             momentum_ok = self.check_momentum(df, structure['signal'])
             if not momentum_ok:
                 logger.debug(f"❌ {symbol} - Momentum not favorable")
@@ -522,27 +521,29 @@ class SmartMoneyAnalyzer:
             valid_signal = False
             
             if structure['signal'] == 'LONG':
-                # Prefer discount zone but allow equilibrium
+                # More lenient zone requirement
                 if pd_zone and pd_zone['zone'] in ['DISCOUNT', 'EQUILIBRIUM']:
                     valid_signal = True
                     entry_price = current_price
-                    stop_loss = order_block['low'] - (atr * 0.5)
+                    # Tighter stop loss for lower risk (0.3 instead of 0.5)
+                    stop_loss = order_block['low'] - (atr * 0.3)
                     risk = entry_price - stop_loss
                     
-                    # Balanced targets
+                    # Optimized targets
                     target1 = entry_price + (risk * 2.0)
                     target2 = entry_price + (risk * 3.5)
                     target3 = entry_price + (risk * 5.0)
             
             elif structure['signal'] == 'SHORT':
-                # Prefer premium zone but allow equilibrium
+                # More lenient zone requirement
                 if pd_zone and pd_zone['zone'] in ['PREMIUM', 'EQUILIBRIUM']:
                     valid_signal = True
                     entry_price = current_price
-                    stop_loss = order_block['high'] + (atr * 0.5)
+                    # Tighter stop loss for lower risk (0.3 instead of 0.5)
+                    stop_loss = order_block['high'] + (atr * 0.3)
                     risk = stop_loss - entry_price
                     
-                    # Balanced targets
+                    # Optimized targets
                     target1 = entry_price - (risk * 2.0)
                     target2 = entry_price - (risk * 3.5)
                     target3 = entry_price - (risk * 5.0)
@@ -557,11 +558,11 @@ class SmartMoneyAnalyzer:
             
             # Conservative leverage based on risk
             risk_percent = (risk / entry_price) * 100
-            if risk_percent < 1.0:
+            if risk_percent < 0.8:
                 leverage = 10
-            elif risk_percent < 1.5:
+            elif risk_percent < 1.2:
                 leverage = 8
-            elif risk_percent < 2.5:
+            elif risk_percent < 2.0:
                 leverage = 5
             else:
                 leverage = 3
@@ -593,6 +594,7 @@ class SmartMoneyAnalyzer:
                 'atr': atr,
                 'rsi': rsi,
                 'rr_ratio': rr_ratio,
+                'risk_percent': risk_percent,
                 'timestamp': datetime.now(timezone.utc)
             }
             
@@ -604,17 +606,27 @@ class SmartMoneyAnalyzer:
 
 
 class ChartGenerator:
-    """Professional chart generator with clean styling"""
+    """Professional chart generator with white background"""
+    
+    @staticmethod
+    def format_price(price: float) -> str:
+        """Format price with comma separator"""
+        if price < 1:
+            return f"${price:.6f}"
+        elif price < 100:
+            return f"${price:,.2f}"
+        else:
+            return f"${price:,.0f}"
     
     @staticmethod
     def create_chart(signal: Dict) -> io.BytesIO:
-        """Create candlestick chart with SMC analysis"""
+        """Create candlestick chart with SMC analysis - White background"""
         try:
             df = signal['df'].tail(120).copy()
             
             fig, ax = plt.subplots(figsize=(20, 12))
-            fig.patch.set_facecolor('#0B0E11')
-            ax.set_facecolor('#0B0E11')
+            fig.patch.set_facecolor('#FFFFFF')
+            ax.set_facecolor('#FFFFFF')
             
             # Plot EMAs
             if 'ema_20' in signal and 'ema_50' in signal:
@@ -623,11 +635,11 @@ class ChartGenerator:
                 ema_200_values = signal['ema_200'].tail(120).values
                 
                 ax.plot(range(len(ema_200_values)), ema_200_values, 
-                       color='#FF6B00', linewidth=2, label='EMA 200', alpha=0.7, zorder=2)
+                       color='#FF6B00', linewidth=2.5, label='EMA 200', alpha=0.8, zorder=2)
                 ax.plot(range(len(ema_50_values)), ema_50_values, 
-                       color='#FFA800', linewidth=2, label='EMA 50', alpha=0.8, zorder=2)
+                       color='#FFA500', linewidth=2.5, label='EMA 50', alpha=0.85, zorder=2)
                 ax.plot(range(len(ema_20_values)), ema_20_values, 
-                       color='#00D4FF', linewidth=2.5, label='EMA 20', alpha=0.9, zorder=2)
+                       color='#0080FF', linewidth=3, label='EMA 20', alpha=0.9, zorder=2)
             
             # Plot candles
             for idx in range(len(df)):
@@ -637,7 +649,7 @@ class ChartGenerator:
                     continue
                 
                 is_bullish = row['close'] >= row['open']
-                candle_color = '#00FF88' if is_bullish else '#FF3B69'
+                candle_color = '#00C853' if is_bullish else '#FF1744'
                 
                 height = abs(row['close'] - row['open'])
                 if height == 0:
@@ -646,37 +658,37 @@ class ChartGenerator:
                 
                 ax.add_patch(Rectangle((idx - 0.35, bottom), 0.7, height, 
                                        facecolor=candle_color, edgecolor=candle_color, 
-                                       alpha=0.95, linewidth=0, zorder=3))
+                                       alpha=0.9, linewidth=0, zorder=3))
                 
                 ax.plot([idx, idx], [row['low'], row['high']], 
-                       color=candle_color, linewidth=2, alpha=0.85, zorder=2)
+                       color=candle_color, linewidth=2.5, alpha=0.8, zorder=2)
             
             # Premium/Discount Zones
             if signal.get('pd_zone'):
                 pd_zone = signal['pd_zone']
                 ax.axhspan(pd_zone['premium_threshold'], pd_zone['high'], 
-                          alpha=0.12, color='#FF3B69', label='Premium Zone', zorder=0)
+                          alpha=0.15, color='#FF1744', label='Premium Zone', zorder=0)
                 ax.axhspan(pd_zone['low'], pd_zone['discount_threshold'], 
-                          alpha=0.12, color='#00FF88', label='Discount Zone', zorder=0)
+                          alpha=0.15, color='#00C853', label='Discount Zone', zorder=0)
                 ax.axhline(pd_zone['equilibrium'], color='#FFD700', 
-                          linestyle='--', linewidth=2, alpha=0.6, label='Equilibrium', zorder=1)
+                          linestyle='--', linewidth=2.5, alpha=0.7, label='Equilibrium', zorder=1)
             
             # Order Block
             if signal.get('order_block'):
                 ob = signal['order_block']
-                ob_color = '#00FF88' if signal['direction'] == 'LONG' else '#FF3B69'
+                ob_color = '#00C853' if signal['direction'] == 'LONG' else '#FF1744'
                 ax.axhspan(ob['low'], ob['high'], alpha=0.3, color=ob_color, 
                           label='Order Block', zorder=1, edgecolor=ob_color, linewidth=3)
                 
                 mid_price = (ob['low'] + ob['high']) / 2
                 ax.text(len(df) - 18, mid_price, '📦 ORDER BLOCK', 
-                       fontsize=12, fontweight='bold', color='white',
-                       bbox=dict(boxstyle='round,pad=0.6', facecolor=ob_color, 
-                                edgecolor='white', linewidth=2, alpha=0.9), zorder=5)
+                       fontsize=13, fontweight='bold', color='white',
+                       bbox=dict(boxstyle='round,pad=0.7', facecolor=ob_color, 
+                                edgecolor='black', linewidth=2.5, alpha=1.0), zorder=5)
             
             # Fair Value Gaps
             for fvg in signal.get('fvgs', []):
-                fvg_color = '#00D4FF' if 'BULLISH' in fvg['type'] else '#FFA800'
+                fvg_color = '#0080FF' if 'BULLISH' in fvg['type'] else '#FFA500'
                 ax.axhspan(fvg['bottom'], fvg['top'], alpha=0.2, 
                           color=fvg_color, zorder=1, linestyle=':', 
                           edgecolor=fvg_color, linewidth=2)
@@ -685,94 +697,98 @@ class ChartGenerator:
             for sh in signal.get('swing_highs', [])[-10:]:
                 if sh['index'] < len(df):
                     ax.plot(sh['index'], sh['price'], 'v', 
-                           color='#FF3B69', markersize=12, markeredgecolor='white', 
-                           markeredgewidth=2, zorder=5)
+                           color='#FF1744', markersize=14, markeredgecolor='black', 
+                           markeredgewidth=2.5, zorder=5)
             
             for sl in signal.get('swing_lows', [])[-10:]:
                 if sl['index'] < len(df):
                     ax.plot(sl['index'], sl['price'], '^', 
-                           color='#00FF88', markersize=12, markeredgecolor='white',
-                           markeredgewidth=2, zorder=5)
+                           color='#00C853', markersize=14, markeredgecolor='black',
+                           markeredgewidth=2.5, zorder=5)
+            
+            # Current Price - Big marker
+            current_idx = len(df) - 1
+            current_price = df['close'].iloc[-1]
+            ax.plot(current_idx, current_price, 'o', color='#FFD700', markersize=20, 
+                   markeredgecolor='black', markeredgewidth=3, label='CURRENT PRICE', zorder=8)
+            
+            # Current price line
+            ax.axhline(current_price, color='#FFD700', linestyle='-', 
+                      linewidth=2, alpha=0.6, zorder=1)
+            
+            # Current price text
+            price_text = ChartGenerator.format_price(current_price)
+            ax.text(len(df) - 3, current_price, f'💰 {price_text}', 
+                   fontsize=13, fontweight='bold', color='black',
+                   bbox=dict(boxstyle='round,pad=0.7', facecolor='#FFD700', 
+                            edgecolor='black', linewidth=2.5, alpha=1.0), 
+                   va='center', zorder=9)
             
             # Entry Point
-            entry_idx = len(df) - 1
             entry_price = signal['entry_price']
-            entry_color = '#00D4FF' if signal['direction'] == 'LONG' else '#FF3B69'
-            ax.plot(entry_idx, entry_price, 'D', color=entry_color, markersize=18, 
-                   markeredgecolor='white', markeredgewidth=3, label='ENTRY', zorder=7)
+            entry_color = '#0080FF' if signal['direction'] == 'LONG' else '#FF1744'
+            ax.plot(current_idx, entry_price, 'D', color=entry_color, markersize=18, 
+                   markeredgecolor='black', markeredgewidth=3, label='ENTRY', zorder=7)
             
             ax.axhline(entry_price, color=entry_color, linestyle='-', 
                       linewidth=2.5, alpha=0.6, zorder=1)
             
             # Stop Loss
-            ax.axhline(signal['stop_loss'], color='#FF3B69', linestyle='--', 
+            ax.axhline(signal['stop_loss'], color='#FF1744', linestyle='--', 
                       linewidth=3, label=f"STOP LOSS", alpha=0.9, zorder=2)
             
-            # Format price display
-            if entry_price < 1:
-                price_format = f"${signal['stop_loss']:.6f}"
-            elif entry_price < 100:
-                price_format = f"${signal['stop_loss']:.2f}"
-            else:
-                price_format = f"${signal['stop_loss']:,.2f}"
-            
-            ax.text(len(df) - 10, signal['stop_loss'], f'SL: {price_format}', 
-                   fontsize=11, fontweight='bold', color='white',
-                   bbox=dict(boxstyle='round,pad=0.5', facecolor='#FF3B69', 
-                            edgecolor='white', linewidth=2, alpha=0.95), zorder=6)
+            sl_text = ChartGenerator.format_price(signal['stop_loss'])
+            ax.text(len(df) - 10, signal['stop_loss'], f'🛑 SL: {sl_text}', 
+                   fontsize=12, fontweight='bold', color='white',
+                   bbox=dict(boxstyle='round,pad=0.6', facecolor='#FF1744', 
+                            edgecolor='black', linewidth=2.5, alpha=1.0), zorder=6)
             
             # Targets
-            target_colors = ['#00FF88', '#00D4AA', '#00B88F']
+            target_colors = ['#00C853', '#00A843', '#008833']
             target_labels = ['🎯 TP1', '🎯 TP2', '🎯 TP3']
             for i, target in enumerate(signal['targets']):
                 ax.axhline(target, color=target_colors[i], linestyle='--', 
                           linewidth=3, label=target_labels[i], alpha=0.9, zorder=2)
                 
-                if target < 1:
-                    tp_format = f"${target:.6f}"
-                elif target < 100:
-                    tp_format = f"${target:.2f}"
-                else:
-                    tp_format = f"${target:,.2f}"
-                
-                ax.text(len(df) - 6, target, f'TP{i+1}: {tp_format}', 
-                       fontsize=11, fontweight='bold', color='white',
-                       bbox=dict(boxstyle='round,pad=0.5', facecolor=target_colors[i], 
-                                edgecolor='white', linewidth=2, alpha=0.95), 
+                tp_text = ChartGenerator.format_price(target)
+                ax.text(len(df) - 6, target, f'TP{i+1}: {tp_text}', 
+                       fontsize=12, fontweight='bold', color='white',
+                       bbox=dict(boxstyle='round,pad=0.6', facecolor=target_colors[i], 
+                                edgecolor='black', linewidth=2.5, alpha=1.0), 
                        ha='center', zorder=6)
             
             # Grid
-            ax.grid(True, alpha=0.15, color='#1E2329', linestyle='-', linewidth=1)
+            ax.grid(True, alpha=0.25, color='#CCCCCC', linestyle='-', linewidth=1)
             ax.set_axisbelow(True)
             
             # Styling
-            ax.tick_params(colors='#848E9C', labelsize=11)
+            ax.tick_params(colors='#333333', labelsize=12)
             for spine in ax.spines.values():
-                spine.set_color('#1E2329')
-                spine.set_linewidth(2)
+                spine.set_color('#333333')
+                spine.set_linewidth(2.5)
             
             # Title
             direction_emoji = "🟢 LONG" if signal['direction'] == 'LONG' else "🔴 SHORT"
             title = f"{direction_emoji} | {signal['symbol_name']} ({signal['ticker']}/USDT) | {signal['timeframe'].upper()}"
-            subtitle = f"Smart Money Concept | R/R: 1:{signal.get('rr_ratio', 0):.1f} | RSI: {signal.get('rsi', 0):.1f}"
+            subtitle = f"Smart Money Concept | R/R: 1:{signal.get('rr_ratio', 0):.1f} | RSI: {signal.get('rsi', 0):.1f} | Risk: {signal.get('risk_percent', 0):.2f}%"
             
-            ax.set_title(title, color='white', fontsize=22, fontweight='bold', pad=20)
+            ax.set_title(title, color='#000000', fontsize=24, fontweight='bold', pad=20)
             ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, 
-                   fontsize=13, ha='center', color='#848E9C', fontweight='bold')
+                   fontsize=14, ha='center', color='#333333', fontweight='bold')
             
-            ax.set_xlabel('Time Period', color='#848E9C', fontsize=14, fontweight='bold')
-            ax.set_ylabel('Price (USDT)', color='#848E9C', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Time Period', color='#333333', fontsize=15, fontweight='bold')
+            ax.set_ylabel('Price (USDT)', color='#333333', fontsize=15, fontweight='bold')
             
             # Legend
-            legend = ax.legend(loc='upper left', fontsize=10, framealpha=0.9, 
-                              facecolor='#0B0E11', edgecolor='#1E2329', 
-                              labelcolor='white', ncol=2)
-            legend.get_frame().set_linewidth(2)
+            legend = ax.legend(loc='upper left', fontsize=11, framealpha=0.95, 
+                              facecolor='#FFFFFF', edgecolor='#333333', 
+                              labelcolor='#000000', ncol=2)
+            legend.get_frame().set_linewidth(2.5)
             
             plt.tight_layout()
             
             buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=120, facecolor='#0B0E11', 
+            plt.savefig(buf, format='png', dpi=120, facecolor='#FFFFFF', 
                        edgecolor='none', bbox_inches='tight')
             buf.seek(0)
             plt.close()
@@ -883,8 +899,8 @@ class TelegramSignalBot:
                 loss_percent = abs((current_price - trade['entry_price']) / trade['entry_price'] * 100)
                 message = f"{emoji} *STOP LOSS HIT*\n\n"
                 message += f"*{symbol_name}* {trade['direction']}\n"
-                message += f"Entry: `${trade['entry_price']:,.4f}`\n"
-                message += f"Exit: `${current_price:,.4f}`\n"
+                message += f"Entry: `{ChartGenerator.format_price(trade['entry_price'])}`\n"
+                message += f"Exit: `{ChartGenerator.format_price(current_price)}`\n"
                 message += f"Loss: *-{loss_percent:.2f}%*"
             
             elif 'TARGET' in update_type:
@@ -896,8 +912,8 @@ class TelegramSignalBot:
                 
                 message = f"{emoji} *TARGET {target_num} HIT!*\n\n"
                 message += f"*{symbol_name}* {trade['direction']}\n"
-                message += f"Entry: `${trade['entry_price']:,.4f}`\n"
-                message += f"Target: `${current_price:,.4f}`\n"
+                message += f"Entry: `{ChartGenerator.format_price(trade['entry_price'])}`\n"
+                message += f"Target: `{ChartGenerator.format_price(current_price)}`\n"
                 message += f"Profit: *+{profit_percent:.2f}%*\n"
                 message += f"With {trade.get('leverage', 1)}x: *+{leverage_profit:.2f}%*"
                 
@@ -928,21 +944,12 @@ class TelegramSignalBot:
             
             rr_ratio = signal.get('rr_ratio', 2.5)
             potential_profit = abs(signal['targets'][0] - signal['entry_price']) / signal['entry_price'] * 100
+            risk_percent = signal.get('risk_percent', 1.0)
             
-            # Format prices based on value
-            entry = signal['entry_price']
-            if entry < 1:
-                entry_str = f"${entry:.6f}"
-                sl_str = f"${signal['stop_loss']:.6f}"
-                tp_strs = [f"${t:.6f}" for t in signal['targets']]
-            elif entry < 100:
-                entry_str = f"${entry:.2f}"
-                sl_str = f"${signal['stop_loss']:.2f}"
-                tp_strs = [f"${t:.2f}" for t in signal['targets']]
-            else:
-                entry_str = f"${entry:,.2f}"
-                sl_str = f"${signal['stop_loss']:,.2f}"
-                tp_strs = [f"${t:,.2f}" for t in signal['targets']]
+            # Format prices
+            entry_str = ChartGenerator.format_price(signal['entry_price'])
+            sl_str = ChartGenerator.format_price(signal['stop_loss'])
+            tp_strs = [ChartGenerator.format_price(t) for t in signal['targets']]
             
             message = f"{direction_emoji} *{signal['direction']}* | {signal['symbol_name']} | {signal['timeframe'].upper()}\n\n"
             
@@ -956,6 +963,7 @@ class TelegramSignalBot:
             
             message += f"⚖️ Risk/Reward: `1:{rr_ratio:.1f}`\n"
             message += f"📊 Leverage: `{signal['leverage']}x`\n"
+            message += f"📉 Risk: `{risk_percent:.2f}%`\n"
             message += f"📈 RSI: `{signal.get('rsi', 0):.1f}`\n"
             message += f"💹 Potential: `+{potential_profit:.1f}%`\n\n"
             message += f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
@@ -1018,6 +1026,7 @@ class TelegramSignalBot:
             logger.info(f"📢 Channel: {CHANNEL_ID}")
             logger.info(f"📊 Symbols: {', '.join([s['ticker'] for s in SYMBOLS.values()])}")
             logger.info(f"⏱️  Timeframes: {', '.join(TIMEFRAMES.keys())}")
+            logger.info(f"🔄 Scan interval: 3 minutes")
         except Exception as e:
             logger.error(f"❌ Connection failed: {e}")
             return
@@ -1031,8 +1040,8 @@ class TelegramSignalBot:
                 await self.scan_markets()
                 await self.monitor_active_trades()
                 
-                logger.info(f"⏸️  Waiting 5 minutes... Active trades: {len(self.active_trades)}")
-                await asyncio.sleep(300)  # 5 minutes
+                logger.info(f"⏸️  Waiting 3 minutes... Active trades: {len(self.active_trades)}")
+                await asyncio.sleep(180)  # 3 minutes
                 
             except KeyboardInterrupt:
                 logger.info("🛑 Stopping bot...")
