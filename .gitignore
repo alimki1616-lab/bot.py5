@@ -1,10 +1,10 @@
-
+البته! این کد نهایی `telegram_bot.py` است:
 Action: file_editor view /app/telegram_bot.py
 Observation: /app/telegram_bot.py:
 1|import os
 2|import asyncio
 3|import logging
-4|from datetime import datetime, timezone, timedelta
+4|from datetime import datetime, timezone
 5|from typing import Dict, List, Optional, Tuple
 6|import numpy as np
 7|import pandas as pd
@@ -18,1103 +18,876 @@ Observation: /app/telegram_bot.py:
 15|from telegram.error import TelegramError
 16|from dotenv import load_dotenv
 17|from pathlib import Path
-18|import time
-19|
-20|# Load environment variables
-21|ROOT_DIR = Path(__file__).parent
-22|load_dotenv(ROOT_DIR / '.env')
-23|
-24|# Configure logging
-25|logging.basicConfig(
-26|    level=logging.INFO,
-27|    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-28|)
-29|logger = logging.getLogger(__name__)
-30|
-31|# Bot Configuration - Load from environment variables
-32|BOT_TOKEN = os.environ.get('BOT_TOKEN')
-33|CHANNEL_ID = os.environ.get('CHANNEL_ID')
-34|
-35|if not BOT_TOKEN or not CHANNEL_ID:
-36|    raise ValueError("❌ BOT_TOKEN and CHANNEL_ID must be set in environment variables (.env file)")
-37|
-38|logger.info(f"✅ Bot Token loaded: {BOT_TOKEN[:10]}...")
-39|logger.info(f"✅ Channel ID: {CHANNEL_ID}")
+18|
+19|# Load environment variables
+20|ROOT_DIR = Path(__file__).parent
+21|load_dotenv(ROOT_DIR / '.env')
+22|
+23|# Configure logging
+24|logging.basicConfig(
+25|    level=logging.INFO,
+26|    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+27|)
+28|logger = logging.getLogger(__name__)
+29|
+30|# Bot Configuration
+31|BOT_TOKEN = os.environ.get('BOT_TOKEN', '8363442271:AAHGrIjbCz1PX10qERyRecxY6UUxbfW-8Es')
+32|CHANNEL_ID = os.environ.get('CHANNEL_ID', '@your_channel')
+33|
+34|logger.info(f"✅ Bot Token loaded: {BOT_TOKEN[:10]}...")
+35|logger.info(f"✅ Channel ID: {CHANNEL_ID}")
+36|
+37|# No Database - Memory only
+38|USE_DATABASE = False
+39|logger.info("💾 Running in memory-only mode (no database)")
 40|
-41|# MongoDB connection (Optional)
-42|mongo_url = os.environ.get('MONGO_URL')
-43|USE_DATABASE = bool(mongo_url and mongo_url.strip())
-44|
-45|if USE_DATABASE:
-46|    try:
-47|        from motor.motor_asyncio import AsyncIOMotorClient
-48|        client = AsyncIOMotorClient(mongo_url)
-49|        db = client[os.environ.get('DB_NAME', 'crypto_signals_db')]
-50|        logger.info("✅ MongoDB enabled - trades will be tracked")
-51|    except Exception as e:
-52|        logger.warning(f"⚠️ MongoDB connection failed: {e}")
-53|        logger.warning("⚠️ Continuing without database...")
-54|        USE_DATABASE = False
-55|        client = None
-56|        db = None
-57|else:
-58|    client = None
-59|    db = None
-60|    logger.info("⚠️ MongoDB disabled - running without database (signals only)")
-61|
-62|# Trading pairs to monitor (format برای CoinGecko)
-63|SYMBOLS = {
-64|    'bitcoin': {'name': 'Bitcoin', 'ticker': 'BTC'},
-65|    'ethereum': {'name': 'Ethereum', 'ticker': 'ETH'},
-66|    'shiba-inu': {'name': 'Shiba Inu', 'ticker': 'SHIB'},
-67|    'cardano': {'name': 'Cardano', 'ticker': 'ADA'},
-68|    'the-open-network': {'name': 'Toncoin', 'ticker': 'TON'},
-69|    'solana': {'name': 'Solana', 'ticker': 'SOL'},
-70|    'binancecoin': {'name': 'BNB', 'ticker': 'BNB'}
-71|}
-72|
-73|TIMEFRAMES = ['15m', '1h']
-74|
-75|# تبدیل timeframe به ثانیه
-76|TIMEFRAME_SECONDS = {
-77|    '15m': 900,
-78|    '1h': 3600
-79|}
-80|
-81|
-82|class CryptoDataFetcher:
-83|    """دریافت داده‌های کریپتو از CryptoCompare"""
-84|    
-85|    def __init__(self):
-86|        self.base_url = "https://min-api.cryptocompare.com/data"
-87|        self.session = requests.Session()
-88|        self.api_key = os.environ.get('CRYPTOCOMPARE_API_KEY', '')
-89|        
-90|        if self.api_key:
-91|            logger.info("✅ CryptoCompare API key loaded")
-92|        else:
-93|            logger.info("⚠️ No CryptoCompare API key - using free tier (limited)")
-94|        
-95|    def get_ohlcv(self, coin_id: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
-96|        """دریافت داده‌های OHLCV از CryptoCompare"""
-97|        try:
-98|            # تبدیل coin_id به ticker symbol
-99|            ticker = SYMBOLS[coin_id]['ticker']
-100|            
-101|            # انتخاب endpoint بر اساس timeframe
-102|            # CryptoCompare محدودیت limit = 2000 دارد
-103|            if timeframe == '15m':
-104|                endpoint = f"{self.base_url}/v2/histominute"
-105|                actual_limit = min(limit * 15, 2000)
-106|                params = {
-107|                    'fsym': ticker,
-108|                    'tsym': 'USDT',
-109|                    'limit': actual_limit,
-110|                    'aggregate': 15
-111|                }
-112|            else:  # 1h
-113|                endpoint = f"{self.base_url}/v2/histohour"
-114|                actual_limit = min(limit, 2000)
-115|                params = {
-116|                    'fsym': ticker,
-117|                    'tsym': 'USDT',
-118|                    'limit': actual_limit
-119|                }
-120|            
-121|            # Add API key if available
-122|            if self.api_key:
-123|                params['api_key'] = self.api_key
-124|            
-125|            response = self.session.get(endpoint, params=params, timeout=15)
-126|            response.raise_for_status()
-127|            data = response.json()
+41|# Trading pairs
+42|SYMBOLS = {
+43|    'bitcoin': {'name': 'Bitcoin', 'ticker': 'BTC'},
+44|    'ethereum': {'name': 'Ethereum', 'ticker': 'ETH'},
+45|    'shiba-inu': {'name': 'Shiba Inu', 'ticker': 'SHIB'},
+46|    'cardano': {'name': 'Cardano', 'ticker': 'ADA'},
+47|    'the-open-network': {'name': 'Toncoin', 'ticker': 'TON'},
+48|    'solana': {'name': 'Solana', 'ticker': 'SOL'},
+49|    'binancecoin': {'name': 'BNB', 'ticker': 'BNB'}
+50|}
+51|
+52|TIMEFRAMES = ['15m', '1h']
+53|
+54|
+55|class CryptoDataFetcher:
+56|    """Fetch crypto data from CryptoCompare"""
+57|    
+58|    def __init__(self):
+59|        self.base_url = "https://min-api.cryptocompare.com/data"
+60|        self.session = requests.Session()
+61|        self.api_key = os.environ.get('CRYPTOCOMPARE_API_KEY', '')
+62|        
+63|        if self.api_key:
+64|            logger.info("✅ CryptoCompare API key loaded")
+65|        else:
+66|            logger.info("⚠️ No CryptoCompare API key - using free tier")
+67|        
+68|    def get_ohlcv(self, coin_id: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
+69|        """Get OHLCV data from CryptoCompare"""
+70|        try:
+71|            ticker = SYMBOLS[coin_id]['ticker']
+72|            
+73|            if timeframe == '15m':
+74|                endpoint = f"{self.base_url}/v2/histominute"
+75|                actual_limit = min(limit * 15, 2000)
+76|                params = {
+77|                    'fsym': ticker,
+78|                    'tsym': 'USDT',
+79|                    'limit': actual_limit,
+80|                    'aggregate': 15
+81|                }
+82|            else:  # 1h
+83|                endpoint = f"{self.base_url}/v2/histohour"
+84|                actual_limit = min(limit, 2000)
+85|                params = {
+86|                    'fsym': ticker,
+87|                    'tsym': 'USDT',
+88|                    'limit': actual_limit
+89|                }
+90|            
+91|            if self.api_key:
+92|                params['api_key'] = self.api_key
+93|            
+94|            response = self.session.get(endpoint, params=params, timeout=15)
+95|            response.raise_for_status()
+96|            data = response.json()
+97|            
+98|            if data.get('Response') == 'Error':
+99|                logger.error(f"API Error: {data.get('Message')}")
+100|                return None
+101|            
+102|            if 'Data' not in data or 'Data' not in data['Data']:
+103|                return None
+104|            
+105|            ohlcv_data = data['Data']['Data']
+106|            df = pd.DataFrame(ohlcv_data)
+107|            
+108|            if df.empty:
+109|                return None
+110|            
+111|            df = df[['time', 'open', 'high', 'low', 'close', 'volumeto']].copy()
+112|            df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+113|            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+114|            df = df[(df['open'] > 0) & (df['high'] > 0) & (df['low'] > 0) & (df['close'] > 0)]
+115|            
+116|            return df.reset_index(drop=True)
+117|            
+118|        except Exception as e:
+119|            logger.error(f"❌ Error fetching data for {coin_id}: {e}")
+120|            return None
+121|    
+122|    def get_current_price(self, coin_id: str) -> float:
+123|        """Get current price"""
+124|        try:
+125|            ticker = SYMBOLS[coin_id]['ticker']
+126|            url = f"{self.base_url}/price"
+127|            params = {'fsym': ticker, 'tsyms': 'USDT'}
 128|            
-129|            if data.get('Response') == 'Error':
-130|                logger.error(f"خطای API: {data.get('Message')}")
-131|                return None
-132|            
-133|            if 'Data' not in data or 'Data' not in data['Data']:
-134|                return None
+129|            if self.api_key:
+130|                params['api_key'] = self.api_key
+131|            
+132|            response = self.session.get(url, params=params, timeout=10)
+133|            response.raise_for_status()
+134|            data = response.json()
 135|            
-136|            # تبدیل به DataFrame
-137|            ohlcv_data = data['Data']['Data']
-138|            df = pd.DataFrame(ohlcv_data)
-139|            
-140|            if df.empty:
-141|                return None
-142|            
-143|            # انتخاب ستون‌های مورد نیاز و تغییر نام
-144|            df = df[['time', 'open', 'high', 'low', 'close', 'volumeto']].copy()
-145|            df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-146|            
-147|            # تبدیل timestamp به datetime
-148|            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-149|            
-150|            # حذف ردیف‌های با مقادیر صفر
-151|            df = df[(df['open'] > 0) & (df['high'] > 0) & (df['low'] > 0) & (df['close'] > 0)]
-152|            
-153|            return df.reset_index(drop=True)
-154|            
-155|        except requests.exceptions.Timeout:
-156|            logger.error(f"⏱️ Timeout fetching data for {coin_id}")
-157|            return None
-158|        except requests.exceptions.RequestException as e:
-159|            logger.error(f"🌐 Network error for {coin_id}: {e}")
-160|            return None
-161|        except Exception as e:
-162|            logger.error(f"❌ Error fetching data for {coin_id}: {e}")
-163|            return None
-164|    
-165|    def get_current_price(self, coin_id: str) -> float:
-166|        """دریافت قیمت فعلی"""
-167|        try:
-168|            ticker = SYMBOLS[coin_id]['ticker']
-169|            url = f"{self.base_url}/price"
-170|            params = {
-171|                'fsym': ticker,
-172|                'tsyms': 'USDT'
-173|            }
-174|            
-175|            if self.api_key:
-176|                params['api_key'] = self.api_key
-177|            
-178|            response = self.session.get(url, params=params, timeout=10)
-179|            response.raise_for_status()
-180|            data = response.json()
-181|            
-182|            return data.get('USDT')
-183|            
-184|        except Exception as e:
-185|            logger.error(f"❌ Error fetching price for {coin_id}: {e}")
-186|            return None
-187|
-188|
-189|# ساخت نمونه fetcher
-190|data_fetcher = CryptoDataFetcher()
-191|
-192|
-193|class SmartMoneyAnalyzer:
-194|    """تحلیلگر Smart Money Concept"""
-195|    
-196|    def __init__(self):
-197|        self.lookback_periods = 50
-198|        self.min_rr_ratio = 2.0  # Minimum Risk/Reward ratio
-199|        self.volume_threshold = 1.5  # Volume must be 1.5x average
-200|        
-201|    def detect_swing_points(self, df: pd.DataFrame) -> Tuple[List, List]:
-202|        """شناسایی Swing High و Swing Low"""
-203|        swing_highs = []
-204|        swing_lows = []
-205|        
-206|        for i in range(2, len(df) - 2):
-207|            # Swing High: قیمت بالاتر از 2 کندل قبل و 2 کندل بعد
-208|            if (df['high'].iloc[i] > df['high'].iloc[i-1] and 
-209|                df['high'].iloc[i] > df['high'].iloc[i-2] and
-210|                df['high'].iloc[i] > df['high'].iloc[i+1] and 
-211|                df['high'].iloc[i] > df['high'].iloc[i+2]):
-212|                swing_highs.append({
-213|                    'index': i,
-214|                    'price': df['high'].iloc[i],
-215|                    'time': df.index[i]
-216|                })
-217|            
-218|            # Swing Low: قیمت پایین‌تر از 2 کندل قبل و 2 کندل بعد
-219|            if (df['low'].iloc[i] < df['low'].iloc[i-1] and 
-220|                df['low'].iloc[i] < df['low'].iloc[i-2] and
-221|                df['low'].iloc[i] < df['low'].iloc[i+1] and 
-222|                df['low'].iloc[i] < df['low'].iloc[i+2]):
-223|                swing_lows.append({
-224|                    'index': i,
-225|                    'price': df['low'].iloc[i],
-226|                    'time': df.index[i]
-227|                })
-228|        
-229|        return swing_highs, swing_lows
-230|    
-231|    def detect_bos_choch(self, df: pd.DataFrame, swing_highs: List, swing_lows: List) -> Dict:
-232|        """شناسایی Break of Structure (BOS) و Change of Character (CHoCH)"""
-233|        if len(swing_highs) < 2 or len(swing_lows) < 2:
-234|            return None
-235|        
-236|        last_swing_high = swing_highs[-1]['price']
-237|        last_swing_low = swing_lows[-1]['price']
-238|        current_price = df['close'].iloc[-1]
-239|        
-240|        # BOS Bullish: شکست آخرین swing high
-241|        if current_price > last_swing_high:
-242|            return {
-243|                'type': 'BOS_BULLISH',
-244|                'signal': 'LONG',
-245|                'level': last_swing_high
-246|            }
-247|        
-248|        # BOS Bearish: شکست آخرین swing low
-249|        if current_price < last_swing_low:
-250|            return {
-251|                'type': 'BOS_BEARISH',
-252|                'signal': 'SHORT',
-253|                'level': last_swing_low
-254|            }
-255|        
-256|        return None
-257|    
-258|    def detect_order_blocks(self, df: pd.DataFrame, signal_type: str) -> Optional[Dict]:
-259|        """شناسایی Order Blocks"""
-260|        order_blocks = []
-261|        
-262|        for i in range(len(df) - 10, len(df) - 1):
-263|            candle = df.iloc[i]
-264|            next_candle = df.iloc[i + 1]
-265|            
-266|            # Bullish Order Block
-267|            if signal_type == 'LONG':
-268|                # آخرین کندل نزولی قبل از حرکت صعودی قوی
-269|                if (candle['close'] < candle['open'] and 
-270|                    next_candle['close'] > next_candle['open'] and
-271|                    (next_candle['close'] - next_candle['open']) > 2 * abs(candle['close'] - candle['open'])):
-272|                    order_blocks.append({
-273|                        'type': 'BULLISH_OB',
-274|                        'high': candle['high'],
-275|                        'low': candle['low'],
-276|                        'index': i
-277|                    })
-278|            
-279|            # Bearish Order Block
-280|            elif signal_type == 'SHORT':
-281|                # آخرین کندل صعودی قبل از حرکت نزولی قوی
-282|                if (candle['close'] > candle['open'] and 
-283|                    next_candle['close'] < next_candle['open'] and
-284|                    (next_candle['open'] - next_candle['close']) > 2 * abs(candle['close'] - candle['open'])):
-285|                    order_blocks.append({
-286|                        'type': 'BEARISH_OB',
-287|                        'high': candle['high'],
-288|                        'low': candle['low'],
-289|                        'index': i
-290|                    })
-291|        
-292|        return order_blocks[-1] if order_blocks else None
-293|    
-294|    def detect_fvg(self, df: pd.DataFrame) -> List[Dict]:
-295|        """شناسایی Fair Value Gaps (FVG)"""
-296|        fvgs = []
-297|        
-298|        for i in range(1, len(df) - 1):
-299|            prev_candle = df.iloc[i - 1]
-300|            current_candle = df.iloc[i]
-301|            next_candle = df.iloc[i + 1]
-302|            
-303|            # Bullish FVG: گپ بین low کندل بعدی و high کندل قبلی
-304|            if next_candle['low'] > prev_candle['high']:
-305|                fvgs.append({
-306|                    'type': 'BULLISH_FVG',
-307|                    'top': next_candle['low'],
-308|                    'bottom': prev_candle['high'],
-309|                    'index': i
-310|                })
-311|            
-312|            # Bearish FVG: گپ بین high کندل بعدی و low کندل قبلی
-313|            if next_candle['high'] < prev_candle['low']:
-314|                fvgs.append({
-315|                    'type': 'BEARISH_FVG',
-316|                    'top': prev_candle['low'],
-317|                    'bottom': next_candle['high'],
-318|                    'index': i
-319|                })
-320|        
-321|        # فقط آخرین FVG ها را برگردان
-322|        return fvgs[-3:] if fvgs else []
-323|    
-324|    def calculate_premium_discount(self, df: pd.DataFrame, swing_highs: List, swing_lows: List) -> Dict:
-325|        """محاسبه Premium و Discount Zone"""
-326|        if not swing_highs or not swing_lows:
-327|            return None
-328|        
-329|        recent_high = max([sh['price'] for sh in swing_highs[-3:]])
-330|        recent_low = min([sl['price'] for sl in swing_lows[-3:]])
-331|        
-332|        range_size = recent_high - recent_low
-333|        current_price = df['close'].iloc[-1]
-334|        
-335|        # Premium zone: 50% - 100% of range
-336|        premium_threshold = recent_low + (range_size * 0.5)
-337|        
-338|        # Discount zone: 0% - 50% of range
-339|        discount_threshold = recent_low + (range_size * 0.5)
-340|        
-341|        equilibrium = recent_low + (range_size * 0.5)
-342|        
-343|        if current_price >= premium_threshold:
-344|            zone = 'PREMIUM'
-345|        elif current_price <= discount_threshold:
-346|            zone = 'DISCOUNT'
-347|        else:
-348|            zone = 'EQUILIBRIUM'
-349|        
-350|        return {
-351|            'zone': zone,
-352|            'high': recent_high,
-353|            'low': recent_low,
-354|            'equilibrium': equilibrium,
-355|            'current': current_price
-356|        }
-357|    
-358|    def calculate_ema(self, df: pd.DataFrame, period: int) -> pd.Series:
-359|        """محاسبه EMA برای تشخیص ترند"""
-360|        return df['close'].ewm(span=period, adjust=False).mean()
-361|    
-362|    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-363|        """محاسبه Average True Range"""
-364|        high_low = df['high'] - df['low']
-365|        high_close = np.abs(df['high'] - df['close'].shift())
-366|        low_close = np.abs(df['low'] - df['close'].shift())
-367|        
-368|        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-369|        true_range = np.max(ranges, axis=1)
-370|        atr = true_range.rolling(period).mean().iloc[-1]
-371|        
-372|        return atr
-373|    
-374|    def check_volume_confirmation(self, df: pd.DataFrame) -> bool:
-375|        """تأیید حجم معاملات"""
-376|        if len(df) < 20:
-377|            return False
-378|        
-379|        avg_volume = df['volume'].tail(20).mean()
-380|        recent_volume = df['volume'].tail(5).mean()
-381|        
-382|        # حجم باید 1.5 برابر میانگین باشد
-383|        return recent_volume >= (avg_volume * self.volume_threshold)
-384|    
-385|    def check_trend_alignment(self, df: pd.DataFrame, signal_direction: str) -> bool:
-386|        """تأیید همسویی با ترند اصلی"""
-387|        ema_20 = self.calculate_ema(df, 20)
-388|        ema_50 = self.calculate_ema(df, 50)
-389|        
-390|        current_price = df['close'].iloc[-1]
-391|        
-392|        if signal_direction == 'LONG':
-393|            # برای Long: EMA20 > EMA50 و قیمت بالای EMA20
-394|            return ema_20.iloc[-1] > ema_50.iloc[-1] and current_price > ema_20.iloc[-1]
-395|        else:  # SHORT
-396|            # برای Short: EMA20 < EMA50 و قیمت پایین EMA20
-397|            return ema_20.iloc[-1] < ema_50.iloc[-1] and current_price < ema_20.iloc[-1]
-398|    
-399|    def generate_signal(self, coin_id: str, timeframe: str) -> Optional[Dict]:
-400|        """تولید سیگنال معاملاتی با فیلترهای پیشرفته"""
-401|        try:
-402|            # دریافت داده‌های قیمتی
-403|            df = data_fetcher.get_ohlcv(coin_id, timeframe, limit=150)
-404|            
-405|            if df is None or len(df) < 60:
-406|                return None
-407|            
-408|            df.set_index('timestamp', inplace=True)
-409|            
-410|            # تحلیل Smart Money
-411|            swing_highs, swing_lows = self.detect_swing_points(df)
-412|            
-413|            if len(swing_highs) < 3 or len(swing_lows) < 3:
-414|                return None
-415|            
-416|            # شناسایی BOS/CHoCH
-417|            structure = self.detect_bos_choch(df, swing_highs, swing_lows)
-418|            
-419|            if not structure:
-420|                return None
-421|            
-422|            # تأیید Volume
-423|            volume_confirmed = self.check_volume_confirmation(df)
-424|            if not volume_confirmed:
-425|                logger.info(f"{coin_id}: Volume confirmation failed")
-426|                return None
-427|            
-428|            # تأیید Trend
-429|            trend_aligned = self.check_trend_alignment(df, structure['signal'])
-430|            if not trend_aligned:
-431|                logger.info(f"{coin_id}: Trend alignment failed")
-432|                return None
-433|            
-434|            # Order Blocks
-435|            order_block = self.detect_order_blocks(df, structure['signal'])
-436|            if not order_block:
-437|                logger.info(f"{coin_id}: No valid Order Block found")
-438|                return None
-439|            
-440|            # Fair Value Gaps
-441|            fvgs = self.detect_fvg(df)
-442|            
-443|            # Premium/Discount Zone
-444|            pd_zone = self.calculate_premium_discount(df, swing_highs, swing_lows)
-445|            
-446|            current_price = df['close'].iloc[-1]
-447|            atr = self.calculate_atr(df)
-448|            
-449|            # محاسبه EMA برای نمایش در چارت
-450|            ema_20 = self.calculate_ema(df, 20)
-451|            ema_50 = self.calculate_ema(df, 50)
-452|            
-453|            # شرایط ورود به معامله
-454|            valid_signal = False
-455|            
-456|            if structure['signal'] == 'LONG':
-457|                # برای Long: باید در Discount Zone باشیم
-458|                if pd_zone and pd_zone['zone'] == 'DISCOUNT':
-459|                    valid_signal = True
-460|                    entry_price = current_price
-461|                    stop_loss = order_block['low'] - (atr * 0.5)  # ATR-based SL
-462|                    risk = entry_price - stop_loss
-463|                    
-464|                    # Targets با نسبت 2:1, 3:1, 4:1
-465|                    target1 = entry_price + (risk * 2.0)
-466|                    target2 = entry_price + (risk * 3.0)
-467|                    target3 = entry_price + (risk * 4.0)
+136|            return data.get('USDT')
+137|            
+138|        except Exception as e:
+139|            logger.error(f"❌ Error fetching price for {coin_id}: {e}")
+140|            return None
+141|
+142|
+143|data_fetcher = CryptoDataFetcher()
+144|
+145|
+146|class SmartMoneyAnalyzer:
+147|    """Smart Money Concept Analyzer"""
+148|    
+149|    def __init__(self):
+150|        self.lookback_periods = 50
+151|        self.min_rr_ratio = 2.0
+152|        self.volume_threshold = 1.5
+153|        
+154|    def detect_swing_points(self, df: pd.DataFrame) -> Tuple[List, List]:
+155|        """Detect Swing Highs and Swing Lows"""
+156|        swing_highs = []
+157|        swing_lows = []
+158|        
+159|        for i in range(2, len(df) - 2):
+160|            if (df['high'].iloc[i] > df['high'].iloc[i-1] and 
+161|                df['high'].iloc[i] > df['high'].iloc[i-2] and
+162|                df['high'].iloc[i] > df['high'].iloc[i+1] and 
+163|                df['high'].iloc[i] > df['high'].iloc[i+2]):
+164|                swing_highs.append({
+165|                    'index': i,
+166|                    'price': df['high'].iloc[i],
+167|                    'time': df.index[i]
+168|                })
+169|            
+170|            if (df['low'].iloc[i] < df['low'].iloc[i-1] and 
+171|                df['low'].iloc[i] < df['low'].iloc[i-2] and
+172|                df['low'].iloc[i] < df['low'].iloc[i+1] and 
+173|                df['low'].iloc[i] < df['low'].iloc[i+2]):
+174|                swing_lows.append({
+175|                    'index': i,
+176|                    'price': df['low'].iloc[i],
+177|                    'time': df.index[i]
+178|                })
+179|        
+180|        return swing_highs, swing_lows
+181|    
+182|    def detect_bos_choch(self, df: pd.DataFrame, swing_highs: List, swing_lows: List) -> Dict:
+183|        """Detect Break of Structure (BOS) and Change of Character (CHoCH)"""
+184|        if len(swing_highs) < 2 or len(swing_lows) < 2:
+185|            return None
+186|        
+187|        last_swing_high = swing_highs[-1]['price']
+188|        last_swing_low = swing_lows[-1]['price']
+189|        current_price = df['close'].iloc[-1]
+190|        
+191|        if current_price > last_swing_high:
+192|            return {
+193|                'type': 'BOS_BULLISH',
+194|                'signal': 'LONG',
+195|                'level': last_swing_high
+196|            }
+197|        
+198|        if current_price < last_swing_low:
+199|            return {
+200|                'type': 'BOS_BEARISH',
+201|                'signal': 'SHORT',
+202|                'level': last_swing_low
+203|            }
+204|        
+205|        return None
+206|    
+207|    def detect_order_blocks(self, df: pd.DataFrame, signal_type: str) -> Optional[Dict]:
+208|        """Detect Order Blocks"""
+209|        order_blocks = []
+210|        
+211|        for i in range(len(df) - 10, len(df) - 1):
+212|            candle = df.iloc[i]
+213|            next_candle = df.iloc[i + 1]
+214|            
+215|            if signal_type == 'LONG':
+216|                if (candle['close'] < candle['open'] and 
+217|                    next_candle['close'] > next_candle['open'] and
+218|                    (next_candle['close'] - next_candle['open']) > 2 * abs(candle['close'] - candle['open'])):
+219|                    order_blocks.append({
+220|                        'type': 'BULLISH_OB',
+221|                        'high': candle['high'],
+222|                        'low': candle['low'],
+223|                        'index': i
+224|                    })
+225|            
+226|            elif signal_type == 'SHORT':
+227|                if (candle['close'] > candle['open'] and 
+228|                    next_candle['close'] < next_candle['open'] and
+229|                    (next_candle['open'] - next_candle['close']) > 2 * abs(candle['close'] - candle['open'])):
+230|                    order_blocks.append({
+231|                        'type': 'BEARISH_OB',
+232|                        'high': candle['high'],
+233|                        'low': candle['low'],
+234|                        'index': i
+235|                    })
+236|        
+237|        return order_blocks[-1] if order_blocks else None
+238|    
+239|    def detect_fvg(self, df: pd.DataFrame) -> List[Dict]:
+240|        """Detect Fair Value Gaps"""
+241|        fvgs = []
+242|        
+243|        for i in range(1, len(df) - 1):
+244|            prev_candle = df.iloc[i - 1]
+245|            next_candle = df.iloc[i + 1]
+246|            
+247|            if next_candle['low'] > prev_candle['high']:
+248|                fvgs.append({
+249|                    'type': 'BULLISH_FVG',
+250|                    'top': next_candle['low'],
+251|                    'bottom': prev_candle['high'],
+252|                    'index': i
+253|                })
+254|            
+255|            if next_candle['high'] < prev_candle['low']:
+256|                fvgs.append({
+257|                    'type': 'BEARISH_FVG',
+258|                    'top': prev_candle['low'],
+259|                    'bottom': next_candle['high'],
+260|                    'index': i
+261|                })
+262|        
+263|        return fvgs[-3:] if fvgs else []
+264|    
+265|    def calculate_premium_discount(self, df: pd.DataFrame, swing_highs: List, swing_lows: List) -> Dict:
+266|        """Calculate Premium and Discount Zones"""
+267|        if not swing_highs or not swing_lows:
+268|            return None
+269|        
+270|        recent_high = max([sh['price'] for sh in swing_highs[-3:]])
+271|        recent_low = min([sl['price'] for sl in swing_lows[-3:]])
+272|        
+273|        range_size = recent_high - recent_low
+274|        current_price = df['close'].iloc[-1]
+275|        
+276|        premium_threshold = recent_low + (range_size * 0.5)
+277|        equilibrium = recent_low + (range_size * 0.5)
+278|        
+279|        if current_price >= premium_threshold:
+280|            zone = 'PREMIUM'
+281|        else:
+282|            zone = 'DISCOUNT'
+283|        
+284|        return {
+285|            'zone': zone,
+286|            'high': recent_high,
+287|            'low': recent_low,
+288|            'equilibrium': equilibrium,
+289|            'current': current_price
+290|        }
+291|    
+292|    def calculate_ema(self, df: pd.DataFrame, period: int) -> pd.Series:
+293|        """Calculate EMA"""
+294|        return df['close'].ewm(span=period, adjust=False).mean()
+295|    
+296|    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+297|        """Calculate Average True Range"""
+298|        high_low = df['high'] - df['low']
+299|        high_close = np.abs(df['high'] - df['close'].shift())
+300|        low_close = np.abs(df['low'] - df['close'].shift())
+301|        
+302|        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+303|        true_range = np.max(ranges, axis=1)
+304|        atr = true_range.rolling(period).mean().iloc[-1]
+305|        
+306|        return atr
+307|    
+308|    def check_volume_confirmation(self, df: pd.DataFrame) -> bool:
+309|        """Volume confirmation"""
+310|        if len(df) < 20:
+311|            return False
+312|        
+313|        avg_volume = df['volume'].tail(20).mean()
+314|        recent_volume = df['volume'].tail(5).mean()
+315|        
+316|        return recent_volume >= (avg_volume * self.volume_threshold)
+317|    
+318|    def check_trend_alignment(self, df: pd.DataFrame, signal_direction: str) -> bool:
+319|        """Check trend alignment"""
+320|        ema_20 = self.calculate_ema(df, 20)
+321|        ema_50 = self.calculate_ema(df, 50)
+322|        
+323|        current_price = df['close'].iloc[-1]
+324|        
+325|        if signal_direction == 'LONG':
+326|            return ema_20.iloc[-1] > ema_50.iloc[-1] and current_price > ema_20.iloc[-1]
+327|        else:
+328|            return ema_20.iloc[-1] < ema_50.iloc[-1] and current_price < ema_20.iloc[-1]
+329|    
+330|    def generate_signal(self, coin_id: str, timeframe: str) -> Optional[Dict]:
+331|        """Generate trading signal"""
+332|        try:
+333|            df = data_fetcher.get_ohlcv(coin_id, timeframe, limit=150)
+334|            
+335|            if df is None or len(df) < 60:
+336|                return None
+337|            
+338|            df.set_index('timestamp', inplace=True)
+339|            
+340|            swing_highs, swing_lows = self.detect_swing_points(df)
+341|            
+342|            if len(swing_highs) < 3 or len(swing_lows) < 3:
+343|                return None
+344|            
+345|            structure = self.detect_bos_choch(df, swing_highs, swing_lows)
+346|            
+347|            if not structure:
+348|                return None
+349|            
+350|            volume_confirmed = self.check_volume_confirmation(df)
+351|            if not volume_confirmed:
+352|                return None
+353|            
+354|            trend_aligned = self.check_trend_alignment(df, structure['signal'])
+355|            if not trend_aligned:
+356|                return None
+357|            
+358|            order_block = self.detect_order_blocks(df, structure['signal'])
+359|            if not order_block:
+360|                return None
+361|            
+362|            fvgs = self.detect_fvg(df)
+363|            pd_zone = self.calculate_premium_discount(df, swing_highs, swing_lows)
+364|            
+365|            current_price = df['close'].iloc[-1]
+366|            atr = self.calculate_atr(df)
+367|            
+368|            ema_20 = self.calculate_ema(df, 20)
+369|            ema_50 = self.calculate_ema(df, 50)
+370|            
+371|            valid_signal = False
+372|            
+373|            if structure['signal'] == 'LONG':
+374|                if pd_zone and pd_zone['zone'] == 'DISCOUNT':
+375|                    valid_signal = True
+376|                    entry_price = current_price
+377|                    stop_loss = order_block['low'] - (atr * 0.5)
+378|                    risk = entry_price - stop_loss
+379|                    
+380|                    target1 = entry_price + (risk * 2.0)
+381|                    target2 = entry_price + (risk * 3.0)
+382|                    target3 = entry_price + (risk * 4.0)
+383|            
+384|            elif structure['signal'] == 'SHORT':
+385|                if pd_zone and pd_zone['zone'] == 'PREMIUM':
+386|                    valid_signal = True
+387|                    entry_price = current_price
+388|                    stop_loss = order_block['high'] + (atr * 0.5)
+389|                    risk = stop_loss - entry_price
+390|                    
+391|                    target1 = entry_price - (risk * 2.0)
+392|                    target2 = entry_price - (risk * 3.0)
+393|                    target3 = entry_price - (risk * 4.0)
+394|            
+395|            if not valid_signal:
+396|                return None
+397|            
+398|            rr_ratio = abs(target1 - entry_price) / risk
+399|            if rr_ratio < self.min_rr_ratio:
+400|                return None
+401|            
+402|            risk_percent = (risk / entry_price) * 100
+403|            if risk_percent < 1.5:
+404|                leverage = 10
+405|            elif risk_percent < 2.5:
+406|                leverage = 7
+407|            elif risk_percent < 4:
+408|                leverage = 5
+409|            else:
+410|                leverage = 3
+411|            
+412|            signal = {
+413|                'coin_id': coin_id,
+414|                'symbol': SYMBOLS[coin_id]['ticker'] + '/USDT',
+415|                'timeframe': timeframe,
+416|                'direction': structure['signal'],
+417|                'entry_price': round(entry_price, 8),
+418|                'stop_loss': round(stop_loss, 8),
+419|                'targets': [
+420|                    round(target1, 8),
+421|                    round(target2, 8),
+422|                    round(target3, 8)
+423|                ],
+424|                'leverage': leverage,
+425|                'structure_type': structure['type'],
+426|                'order_block': order_block,
+427|                'fvgs': fvgs,
+428|                'pd_zone': pd_zone,
+429|                'df': df,
+430|                'swing_highs': swing_highs,
+431|                'swing_lows': swing_lows,
+432|                'ema_20': ema_20,
+433|                'ema_50': ema_50,
+434|                'atr': atr,
+435|                'rr_ratio': rr_ratio,
+436|                'timestamp': datetime.now(timezone.utc)
+437|            }
+438|            
+439|            return signal
+440|            
+441|        except Exception as e:
+442|            logger.error(f"❌ Error generating signal for {coin_id}: {e}")
+443|            return None
+444|
+445|
+446|class ChartGenerator:
+447|    """Professional chart generator"""
+448|    
+449|    @staticmethod
+450|    def create_chart(signal: Dict) -> io.BytesIO:
+451|        """Create candlestick chart with SMC analysis"""
+452|        try:
+453|            df = signal['df'].tail(100)
+454|            
+455|            fig, ax = plt.subplots(figsize=(20, 12))
+456|            fig.patch.set_facecolor('#ffffff')
+457|            ax.set_facecolor('#ffffff')
+458|            
+459|            # Plot EMAs
+460|            if 'ema_20' in signal and 'ema_50' in signal:
+461|                ema_20_values = signal['ema_20'].tail(100).values
+462|                ema_50_values = signal['ema_50'].tail(100).values
+463|                
+464|                ax.plot(range(len(ema_20_values)), ema_20_values, 
+465|                       color='#2962FF', linewidth=2, label='EMA 20', alpha=0.8, zorder=2)
+466|                ax.plot(range(len(ema_50_values)), ema_50_values, 
+467|                       color='#FF6D00', linewidth=2, label='EMA 50', alpha=0.8, zorder=2)
 468|            
-469|            elif structure['signal'] == 'SHORT':
-470|                # برای Short: باید در Premium Zone باشیم
-471|                if pd_zone and pd_zone['zone'] == 'PREMIUM':
-472|                    valid_signal = True
-473|                    entry_price = current_price
-474|                    stop_loss = order_block['high'] + (atr * 0.5)  # ATR-based SL
-475|                    risk = stop_loss - entry_price
-476|                    
-477|                    # Targets با نسبت 2:1, 3:1, 4:1
-478|                    target1 = entry_price - (risk * 2.0)
-479|                    target2 = entry_price - (risk * 3.0)
-480|                    target3 = entry_price - (risk * 4.0)
-481|            
-482|            if not valid_signal:
-483|                return None
-484|            
-485|            # بررسی حداقل R/R
-486|            rr_ratio = abs(target1 - entry_price) / risk
-487|            if rr_ratio < self.min_rr_ratio:
-488|                logger.info(f"{coin_id}: R/R ratio too low ({rr_ratio:.2f})")
-489|                return None
+469|            # Plot candles
+470|            for idx in range(len(df)):
+471|                row = df.iloc[idx]
+472|                
+473|                if pd.isna(row['open']) or pd.isna(row['close']):
+474|                    continue
+475|                
+476|                is_bullish = row['close'] >= row['open']
+477|                candle_color = '#089981' if is_bullish else '#F23645'
+478|                
+479|                height = abs(row['close'] - row['open'])
+480|                if height == 0:
+481|                    height = 0.0001
+482|                bottom = min(row['open'], row['close'])
+483|                
+484|                ax.add_patch(Rectangle((idx - 0.4, bottom), 0.8, height, 
+485|                                       facecolor=candle_color, edgecolor=candle_color, 
+486|                                       alpha=0.9, linewidth=1, zorder=3))
+487|                
+488|                ax.plot([idx, idx], [row['low'], row['high']], 
+489|                       color=candle_color, linewidth=1.5, alpha=0.8, zorder=2)
 490|            
-491|            # محاسبه لوریج محافظه‌کارانه
-492|            risk_percent = (risk / entry_price) * 100
-493|            if risk_percent < 1.5:
-494|                leverage = 10
-495|            elif risk_percent < 2.5:
-496|                leverage = 7
-497|            elif risk_percent < 4:
-498|                leverage = 5
-499|            else:
-500|                leverage = 3
-501|            
-502|            signal = {
-503|                'coin_id': coin_id,
-504|                'symbol': SYMBOLS[coin_id]['ticker'] + '/USDT',
-505|                'timeframe': timeframe,
-506|                'direction': structure['signal'],
-507|                'entry_price': round(entry_price, 8),
-508|                'stop_loss': round(stop_loss, 8),
-509|                'targets': [
-510|                    round(target1, 8),
-511|                    round(target2, 8),
-512|                    round(target3, 8)
-513|                ],
-514|                'leverage': leverage,
-515|                'structure_type': structure['type'],
-516|                'order_block': order_block,
-517|                'fvgs': fvgs,
-518|                'pd_zone': pd_zone,
-519|                'df': df,
-520|                'swing_highs': swing_highs,
-521|                'swing_lows': swing_lows,
-522|                'ema_20': ema_20,
-523|                'ema_50': ema_50,
-524|                'atr': atr,
-525|                'rr_ratio': rr_ratio,
-526|                'timestamp': datetime.now(timezone.utc)
-527|            }
-528|            
-529|            return signal
-530|            
-531|        except Exception as e:
-532|            logger.error(f"❌ Error generating signal for {coin_id}: {e}")
-533|            return None
-534|
-535|
-536|class ChartGenerator:
-537|    """تولید چارت‌های تحلیلی حرفه‌ای"""
-538|    
-539|    @staticmethod
-540|    def create_chart(signal: Dict) -> io.BytesIO:
-541|        """ساخت چارت کندلی با تحلیل SMC - TradingView Style"""
-542|        try:
-543|            df = signal['df'].tail(100)  # آخرین 100 کندل
+491|            # Premium/Discount Zones
+492|            if signal.get('pd_zone'):
+493|                pd_zone = signal['pd_zone']
+494|                ax.axhspan(pd_zone['equilibrium'], pd_zone['high'], 
+495|                          alpha=0.08, color='#F23645', label='Premium Zone', zorder=0)
+496|                ax.axhspan(pd_zone['low'], pd_zone['equilibrium'], 
+497|                          alpha=0.08, color='#089981', label='Discount Zone', zorder=0)
+498|                ax.axhline(pd_zone['equilibrium'], color='#787B86', 
+499|                          linestyle='--', linewidth=1.5, alpha=0.7, label='Equilibrium', zorder=1)
+500|                
+501|                # Add labels
+502|                ax.text(5, pd_zone['high'], f'RESISTANCE: ${pd_zone["high"]:,.2f}', 
+503|                       fontsize=10, color='#F23645', fontweight='bold',
+504|                       bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
+505|                                edgecolor='#F23645', linewidth=1.5), zorder=5)
+506|                
+507|                ax.text(5, pd_zone['low'], f'SUPPORT: ${pd_zone["low"]:,.2f}', 
+508|                       fontsize=10, color='#089981', fontweight='bold',
+509|                       bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
+510|                                edgecolor='#089981', linewidth=1.5), zorder=5)
+511|            
+512|            # Order Block
+513|            if signal.get('order_block'):
+514|                ob = signal['order_block']
+515|                ob_color = '#089981' if signal['direction'] == 'LONG' else '#F23645'
+516|                ax.axhspan(ob['low'], ob['high'], alpha=0.25, color=ob_color, 
+517|                          label='Order Block', zorder=1, edgecolor=ob_color, linewidth=2)
+518|                
+519|                mid_price = (ob['low'] + ob['high']) / 2
+520|                ax.text(len(df) - 15, mid_price, 'ORDER BLOCK', 
+521|                       fontsize=11, fontweight='bold', color=ob_color,
+522|                       bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
+523|                                edgecolor=ob_color, linewidth=2), zorder=4)
+524|            
+525|            # Fair Value Gaps
+526|            for fvg in signal.get('fvgs', []):
+527|                fvg_color = '#2962FF' if 'BULLISH' in fvg['type'] else '#FF6D00'
+528|                ax.axhspan(fvg['bottom'], fvg['top'], alpha=0.15, 
+529|                          color=fvg_color, zorder=1, linestyle='--', 
+530|                          edgecolor=fvg_color, linewidth=1)
+531|            
+532|            # Swing Points
+533|            for sh in signal.get('swing_highs', [])[-8:]:
+534|                if sh['index'] < len(df):
+535|                    ax.plot(sh['index'], sh['price'], 'v', 
+536|                           color='#F23645', markersize=10, markeredgecolor='white', 
+537|                           markeredgewidth=1.5, zorder=4)
+538|            
+539|            for sl in signal.get('swing_lows', [])[-8:]:
+540|                if sl['index'] < len(df):
+541|                    ax.plot(sl['index'], sl['price'], '^', 
+542|                           color='#089981', markersize=10, markeredgecolor='white',
+543|                           markeredgewidth=1.5, zorder=4)
 544|            
-545|            # TradingView style: background سفید
-546|            fig, ax = plt.subplots(figsize=(20, 12))
-547|            fig.patch.set_facecolor('#ffffff')
-548|            ax.set_facecolor('#ffffff')
-549|            
-550|            # رسم EMA ها
-551|            if 'ema_20' in signal and 'ema_50' in signal:
-552|                ema_20_values = signal['ema_20'].tail(100).values
-553|                ema_50_values = signal['ema_50'].tail(100).values
-554|                
-555|                ax.plot(range(len(ema_20_values)), ema_20_values, 
-556|                       color='#2962FF', linewidth=2, label='EMA 20', alpha=0.8, zorder=2)
-557|                ax.plot(range(len(ema_50_values)), ema_50_values, 
-558|                       color='#FF6D00', linewidth=2, label='EMA 50', alpha=0.8, zorder=2)
-559|            
-560|            # رسم کندل‌ها - TradingView colors
-561|            for idx in range(len(df)):
-562|                row = df.iloc[idx]
-563|                
-564|                # بررسی اینکه مقادیر معتبر هستند
-565|                if pd.isna(row['open']) or pd.isna(row['close']) or pd.isna(row['high']) or pd.isna(row['low']):
-566|                    continue
-567|                
-568|                # TradingView default colors
-569|                is_bullish = row['close'] >= row['open']
-570|                candle_color = '#089981' if is_bullish else '#F23645'
-571|                wick_color = '#089981' if is_bullish else '#F23645'
-572|                
-573|                # بدنه کندل
-574|                height = abs(row['close'] - row['open'])
-575|                if height == 0:
-576|                    height = 0.0001  # جلوگیری از خطا
-577|                bottom = min(row['open'], row['close'])
-578|                
-579|                ax.add_patch(Rectangle((idx - 0.4, bottom), 0.8, height, 
-580|                                       facecolor=candle_color, edgecolor=candle_color, 
-581|                                       alpha=0.9, linewidth=1, zorder=3))
-582|                
-583|                # سایه کندل
-584|                ax.plot([idx, idx], [row['low'], row['high']], 
-585|                       color=wick_color, linewidth=1.5, alpha=0.8, zorder=2)
-586|            
-587|            # رسم Premium/Discount Zones
-588|            if signal.get('pd_zone'):
-589|                pd_zone = signal['pd_zone']
-590|                ax.axhspan(pd_zone['equilibrium'], pd_zone['high'], 
-591|                          alpha=0.08, color='#F23645', label='Premium Zone', zorder=0)
-592|                ax.axhspan(pd_zone['low'], pd_zone['equilibrium'], 
-593|                          alpha=0.08, color='#089981', label='Discount Zone', zorder=0)
-594|                ax.axhline(pd_zone['equilibrium'], color='#787B86', 
-595|                          linestyle='--', linewidth=1.5, alpha=0.7, label='Equilibrium', zorder=1)
-596|            
-597|            # رسم Order Block با label
-598|            if signal.get('order_block'):
-599|                ob = signal['order_block']
-600|                ob_color = '#089981' if signal['direction'] == 'LONG' else '#F23645'
-601|                ax.axhspan(ob['low'], ob['high'], alpha=0.25, color=ob_color, 
-602|                          label='Order Block', zorder=1, edgecolor=ob_color, linewidth=2)
-603|                
-604|                # اضافه کردن text label برای Order Block
-605|                mid_price = (ob['low'] + ob['high']) / 2
-606|                ax.text(len(df) - 15, mid_price, 'OB', 
-607|                       fontsize=12, fontweight='bold', color=ob_color,
-608|                       bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
-609|                                edgecolor=ob_color, linewidth=2), zorder=4)
-610|            
-611|            # رسم Fair Value Gaps
-612|            for i, fvg in enumerate(signal.get('fvgs', [])):
-613|                fvg_color = '#2962FF' if 'BULLISH' in fvg['type'] else '#FF6D00'
-614|                ax.axhspan(fvg['bottom'], fvg['top'], alpha=0.15, 
-615|                          color=fvg_color, zorder=1, linestyle='--', 
-616|                          edgecolor=fvg_color, linewidth=1)
-617|            
-618|            # رسم Swing Points
-619|            for sh in signal.get('swing_highs', [])[-8:]:
-620|                if sh['index'] < len(df):
-621|                    ax.plot(sh['index'], sh['price'], 'v', 
-622|                           color='#F23645', markersize=10, markeredgecolor='white', 
-623|                           markeredgewidth=1.5, zorder=4)
-624|            
-625|            for sl in signal.get('swing_lows', [])[-8:]:
-626|                if sl['index'] < len(df):
-627|                    ax.plot(sl['index'], sl['price'], '^', 
-628|                           color='#089981', markersize=10, markeredgecolor='white',
-629|                           markeredgewidth=1.5, zorder=4)
-630|            
-631|            # نقطه ورود - بزرگتر و واضح‌تر
-632|            entry_idx = len(df) - 1
-633|            entry_price = signal['entry_price']
-634|            entry_color = '#2962FF' if signal['direction'] == 'LONG' else '#F23645'
-635|            ax.plot(entry_idx, entry_price, 'D', color=entry_color, markersize=15, 
-636|                   markeredgecolor='white', markeredgewidth=2.5, label='ENTRY', zorder=6)
-637|            
-638|            # خط Entry
-639|            ax.axhline(entry_price, color=entry_color, linestyle='-', 
-640|                      linewidth=2, alpha=0.5, zorder=1)
-641|            
-642|            # Stop Loss - قرمز و واضح
-643|            ax.axhline(signal['stop_loss'], color='#F23645', linestyle='--', 
-644|                      linewidth=2.5, label=f"SL: ${signal['stop_loss']:.4f}", alpha=0.9, zorder=2)
-645|            
-646|            # Targets - سبز و واضح
-647|            target_colors = ['#26A69A', '#00897B', '#00695C']
-648|            for i, target in enumerate(signal['targets']):
-649|                ax.axhline(target, color=target_colors[i], linestyle='--', 
-650|                          linewidth=2.5, label=f"TP{i+1}: ${target:.4f}", alpha=0.9, zorder=2)
-651|                
-652|                # Label روی خط
-653|                ax.text(len(df) - 5, target, f'TP{i+1}', 
-654|                       fontsize=11, fontweight='bold', color=target_colors[i],
-655|                       bbox=dict(boxstyle='round,pad=0.4', facecolor='white', 
-656|                                edgecolor=target_colors[i], linewidth=2), 
-657|                       ha='center', zorder=5)
-658|            
-659|            # Grid - سبک TradingView
-660|            ax.grid(True, alpha=0.2, color='#E0E3EB', linestyle='-', linewidth=0.5)
-661|            ax.set_axisbelow(True)
-662|            
-663|            # تنظیمات محور - سبک TradingView
-664|            ax.tick_params(colors='#131722', labelsize=11)
-665|            for spine in ax.spines.values():
-666|                spine.set_color('#E0E3EB')
-667|                spine.set_linewidth(1)
-668|            
-669|            # عنوان و برچسب‌ها
-670|            direction_emoji = "🟢 LONG" if signal['direction'] == 'LONG' else "🔴 SHORT"
-671|            coin_data = SYMBOLS.get(signal['coin_id'])
-672|            title_name = coin_data['name'] if coin_data else signal['symbol']
-673|            
-674|            # عنوان حرفه‌ای
-675|            title = f"{direction_emoji} | {title_name} ({signal['symbol']}) | {signal['timeframe'].upper()}"
-676|            subtitle = f"Smart Money Concept Analysis | R/R: 1:{signal.get('rr_ratio', 0):.1f}"
-677|            
-678|            ax.set_title(title, color='#131722', fontsize=20, fontweight='bold', pad=15)
-679|            ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, 
-680|                   fontsize=12, ha='center', color='#787B86')
-681|            
-682|            ax.set_xlabel('Time Period', color='#131722', fontsize=13, fontweight='bold')
-683|            ax.set_ylabel('Price (USDT)', color='#131722', fontsize=13, fontweight='bold')
-684|            
-685|            # Legend - حرفه‌ای
-686|            legend = ax.legend(loc='upper left', fontsize=10, framealpha=0.95, 
-687|                              facecolor='white', edgecolor='#E0E3EB', 
-688|                              shadow=True, ncol=2)
-689|            legend.get_frame().set_linewidth(1.5)
-690|            
-691|            plt.tight_layout()
-692|            
-693|            # ذخیره با کیفیت بالا
-694|            buf = io.BytesIO()
-695|            plt.savefig(buf, format='png', dpi=150, facecolor='#ffffff', 
-696|                       edgecolor='none', bbox_inches='tight')
-697|            buf.seek(0)
-698|            plt.close()
-699|            
-700|            return buf
-701|            
-702|        except Exception as e:
-703|            logger.error(f"❌ Error creating chart: {e}")
-704|            # Return a simple error image
-705|            fig, ax = plt.subplots(figsize=(10, 6))
-706|            ax.text(0.5, 0.5, f'Error creating chart\n{str(e)}', 
-707|                   ha='center', va='center', fontsize=14, color='red')
-708|            ax.axis('off')
-709|            buf = io.BytesIO()
-710|            plt.savefig(buf, format='png', dpi=150)
-711|            buf.seek(0)
-712|            plt.close()
-713|            return buf
-714|
-715|
-716|class TelegramSignalBot:
-717|    """ربات تلگرام برای ارسال سیگنال‌ها"""
-718|    
-719|    def __init__(self):
-720|        self.bot = Bot(token=BOT_TOKEN)
-721|        self.analyzer = SmartMoneyAnalyzer()
-722|        self.chart_gen = ChartGenerator()
-723|        self.active_trades_cache = {}  # In-memory cache when DB is disabled
-724|        
-725|    async def check_active_trades(self) -> Dict[str, Dict]:
-726|        """بررسی معاملات فعال"""
-727|        if not USE_DATABASE:
-728|            # Use in-memory cache
-729|            return self.active_trades_cache
-730|        
-731|        try:
-732|            active_trades = {}
-733|            cursor = db.active_signals.find({})
-734|            async for trade in cursor:
-735|                coin_id = trade.get('coin_id', trade.get('symbol'))
-736|                active_trades[coin_id] = trade
-737|            return active_trades
-738|        except Exception as e:
-739|            logger.error(f"❌ Error checking active trades: {e}")
-740|            return {}
-741|    
-742|    async def save_signal(self, signal: Dict, message_id: int):
-743|        """ذخیره سیگنال در دیتابیس یا cache"""
-744|        signal_doc = {
-745|            'coin_id': signal['coin_id'],
-746|            'symbol': signal['symbol'],
-747|            'timeframe': signal['timeframe'],
-748|            'direction': signal['direction'],
-749|            'entry_price': signal['entry_price'],
-750|            'stop_loss': signal['stop_loss'],
-751|            'targets': signal['targets'],
-752|            'leverage': signal['leverage'],
-753|            'message_id': message_id,
-754|            'status': 'ACTIVE',
-755|            'targets_hit': [],
-756|            'created_at': datetime.now(timezone.utc).isoformat()
-757|        }
-758|        
-759|        if USE_DATABASE:
-760|            try:
-761|                await db.active_signals.insert_one(signal_doc)
-762|                logger.info(f"✅ Signal saved to DB: {signal['symbol']} {signal['direction']}")
-763|            except Exception as e:
-764|                logger.error(f"❌ Error saving signal to DB: {e}")
-765|                # Fallback to cache
-766|                self.active_trades_cache[signal['coin_id']] = signal_doc
-767|        else:
-768|            # Save to in-memory cache
-769|            self.active_trades_cache[signal['coin_id']] = signal_doc
-770|            logger.info(f"✅ Signal cached: {signal['symbol']} {signal['direction']}")
-771|    
-772|    async def update_trade_status(self, coin_id: str, status: str, hit_target: Optional[int] = None):
-773|        """به‌روزرسانی وضعیت معامله"""
-774|        if not USE_DATABASE:
-775|            # Update in-memory cache
-776|            if coin_id in self.active_trades_cache:
-777|                if hit_target:
-778|                    if 'targets_hit' not in self.active_trades_cache[coin_id]:
-779|                        self.active_trades_cache[coin_id]['targets_hit'] = []
-780|                    self.active_trades_cache[coin_id]['targets_hit'].append(hit_target)
-781|                else:
-782|                    self.active_trades_cache[coin_id]['status'] = status
-783|            return
-784|        
-785|        try:
-786|            update_data = {'status': status}
-787|            
-788|            if hit_target:
-789|                await db.active_signals.update_one(
-790|                    {'coin_id': coin_id, 'status': 'ACTIVE'},
-791|                    {'$push': {'targets_hit': hit_target}}
-792|                )
-793|            else:
-794|                await db.active_signals.update_one(
-795|                    {'coin_id': coin_id, 'status': 'ACTIVE'},
-796|                    {'$set': update_data}
-797|                )
-798|        except Exception as e:
-799|            logger.error(f"❌ Error updating trade status: {e}")
-800|    
-801|    async def monitor_active_trades(self):
-802|        """بررسی معاملات فعال و چک کردن TP/SL"""
-803|        active_trades = await self.check_active_trades()
-804|        
-805|        if not active_trades:
-806|            return
-807|        
-808|        for coin_id, trade in active_trades.items():
-809|            try:
-810|                # دریافت قیمت فعلی
-811|                current_price = data_fetcher.get_current_price(coin_id)
-812|                
-813|                if current_price is None:
-814|                    continue
-815|                
-816|                # بررسی Stop Loss
-817|                if trade['direction'] == 'LONG':
-818|                    if current_price <= trade['stop_loss']:
-819|                        await self.send_trade_update(trade, 'STOP_LOSS', current_price)
-820|                        await self.update_trade_status(coin_id, 'CLOSED_SL')
-821|                        if not USE_DATABASE and coin_id in self.active_trades_cache:
-822|                            del self.active_trades_cache[coin_id]
-823|                        elif USE_DATABASE:
-824|                            await db.active_signals.delete_one({'coin_id': coin_id})
-825|                        continue
-826|                    
-827|                    # بررسی Targets
-828|                    for i, target in enumerate(trade['targets'], 1):
-829|                        if current_price >= target and i not in trade.get('targets_hit', []):
-830|                            await self.send_trade_update(trade, f'TARGET_{i}', current_price)
-831|                            await self.update_trade_status(coin_id, 'ACTIVE', i)
-832|                            
-833|                            # اگر همه تارگت‌ها هیت شد
-834|                            if i == len(trade['targets']):
-835|                                await self.update_trade_status(coin_id, 'CLOSED_TP')
-836|                                if not USE_DATABASE and coin_id in self.active_trades_cache:
-837|                                    del self.active_trades_cache[coin_id]
-838|                                elif USE_DATABASE:
-839|                                    await db.active_signals.delete_one({'coin_id': coin_id})
-840|                
-841|                else:  # SHORT
-842|                    if current_price >= trade['stop_loss']:
-843|                        await self.send_trade_update(trade, 'STOP_LOSS', current_price)
-844|                        await self.update_trade_status(coin_id, 'CLOSED_SL')
-845|                        if not USE_DATABASE and coin_id in self.active_trades_cache:
-846|                            del self.active_trades_cache[coin_id]
-847|                        elif USE_DATABASE:
-848|                            await db.active_signals.delete_one({'coin_id': coin_id})
-849|                        continue
-850|                    
-851|                    # بررسی Targets
-852|                    for i, target in enumerate(trade['targets'], 1):
-853|                        if current_price <= target and i not in trade.get('targets_hit', []):
-854|                            await self.send_trade_update(trade, f'TARGET_{i}', current_price)
-855|                            await self.update_trade_status(coin_id, 'ACTIVE', i)
-856|                            
-857|                            # اگر همه تارگت‌ها هیت شد
-858|                            if i == len(trade['targets']):
-859|                                await self.update_trade_status(coin_id, 'CLOSED_TP')
-860|                                if not USE_DATABASE and coin_id in self.active_trades_cache:
-861|                                    del self.active_trades_cache[coin_id]
-862|                                elif USE_DATABASE:
-863|                                    await db.active_signals.delete_one({'coin_id': coin_id})
-864|            
-865|            except Exception as e:
-866|                logger.error(f"❌ Error monitoring {coin_id}: {e}")
-867|    
-868|    async def send_trade_update(self, trade: Dict, update_type: str, current_price: float):
-869|        """ارسال آپدیت معامله به کانال - English & Professional"""
-870|        try:
-871|            # پیدا کردن نام ارز
-872|            coin_id = trade.get('coin_id', '')
-873|            coin_data = SYMBOLS.get(coin_id, {})
-874|            symbol_name = coin_data.get('name', trade['symbol'])
-875|            
-876|            if update_type == 'STOP_LOSS':
-877|                emoji = "🛑"
-878|                message = f"{emoji} *STOP LOSS TRIGGERED*\n"
-879|                message += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-880|                message += f"*{symbol_name}* `{trade['symbol']}`\n"
-881|                message += f"Direction: *{trade['direction']}*\n\n"
-882|                message += f"Entry Price: `${trade['entry_price']:.6f}`\n"
-883|                message += f"Stop Loss: `${trade['stop_loss']:.6f}`\n"
-884|                message += f"Exit Price: `${current_price:.6f}`\n\n"
-885|                
-886|                loss_percent = abs((current_price - trade['entry_price']) / trade['entry_price'] * 100)
-887|                message += f"📉 Loss: *-{loss_percent:.2f}%*\n\n"
-888|                message += f"⚠️ Trade closed at stop loss"
-889|            
-890|            elif 'TARGET' in update_type:
-891|                target_num = int(update_type.split('_')[1])
-892|                
-893|                if target_num == 1:
-894|                    emoji = "✅"
-895|                elif target_num == 2:
-896|                    emoji = "💚"
-897|                else:
-898|                    emoji = "🎯"
-899|                
-900|                message = f"{emoji} *TARGET {target_num} REACHED*\n"
-901|                message += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-902|                message += f"*{symbol_name}* `{trade['symbol']}`\n"
-903|                message += f"Direction: *{trade['direction']}*\n\n"
-904|                message += f"Entry Price: `${trade['entry_price']:.6f}`\n"
-905|                message += f"Target {target_num}: `${trade['targets'][target_num-1]:.6f}`\n"
-906|                message += f"Current Price: `${current_price:.6f}`\n\n"
-907|                
-908|                profit_percent = abs((current_price - trade['entry_price']) / trade['entry_price'] * 100)
-909|                leverage_profit = profit_percent * trade.get('leverage', 1)
-910|                
-911|                message += f"📈 Profit: *+{profit_percent:.2f}%*\n"
-912|                message += f"💰 With {trade.get('leverage', 1)}x Leverage: *+{leverage_profit:.2f}%*\n\n"
-913|                
-914|                if target_num == len(trade['targets']):
-915|                    message += f"🎉 *ALL TARGETS HIT!*\n"
-916|                    message += f"✨ Trade completed successfully!"
-917|                else:
-918|                    message += f"⏫ Moving to next target..."
-919|            
-920|            # Reply به پیام اصلی
-921|            await self.bot.send_message(
-922|                chat_id=CHANNEL_ID,
-923|                text=message,
-924|                parse_mode='Markdown',
-925|                reply_to_message_id=trade['message_id']
-926|            )
-927|            
-928|            logger.info(f"✅ Update sent: {symbol_name} - {update_type}")
-929|            
-930|        except Exception as e:
-931|            logger.error(f"❌ Error sending update: {e}")
-932|    
-933|    async def send_signal(self, signal: Dict):
-934|        """ارسال سیگنال به کانال تلگرام - Professional Format"""
-935|        try:
-936|            # تولید چارت
-937|            chart_buffer = self.chart_gen.create_chart(signal)
-938|            
-939|            # متن پیام
-940|            coin_data = SYMBOLS.get(signal['coin_id'])
-941|            symbol_name = coin_data['name'] if coin_data else signal['symbol']
-942|            
-943|            # Direction with emoji
-944|            if signal['direction'] == 'LONG':
-945|                direction_emoji = "🟢"
-946|                direction_text = "LONG"
-947|            else:
-948|                direction_emoji = "🔴"
-949|                direction_text = "SHORT"
-950|            
-951|            # Risk/Reward
-952|            risk = abs(signal['entry_price'] - signal['stop_loss'])
-953|            rr_ratio = signal.get('rr_ratio', 2.0)
-954|            
-955|            # محاسبه potential profit
-956|            potential_profit_tp1 = abs(signal['targets'][0] - signal['entry_price']) / signal['entry_price'] * 100
-957|            potential_profit_tp3 = abs(signal['targets'][2] - signal['entry_price']) / signal['entry_price'] * 100
-958|            
-959|            timestamp_str = datetime.now(timezone.utc).strftime('%d %b %Y, %H:%M UTC')
-960|            
-961|            # پیام حرفه‌ای و منظم
-962|            message = f"{direction_emoji} *{direction_text} SIGNAL*\n"
-963|            message += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-964|            
-965|            message += f"📊 *{symbol_name}* `{signal['symbol']}`\n"
-966|            message += f"⏱ Timeframe: *{signal['timeframe'].upper()}*\n"
-967|            message += f"🔍 Structure: `{signal['structure_type']}`\n\n"
-968|            
-969|            message += f"━━━━━━━━━━━━━━━━━━━━\n"
-970|            message += f"*ENTRY ZONE*\n"
-971|            message += f"💵 `${signal['entry_price']:.6f}`\n\n"
-972|            
-973|            message += f"*TAKE PROFIT TARGETS*\n"
-974|            for i, target in enumerate(signal['targets'], 1):
-975|                if i == 1:
-976|                    emoji = "🎯"
-977|                elif i == 2:
-978|                    emoji = "💚"
-979|                else:
-980|                    emoji = "✨"
-981|                message += f"{emoji} TP{i}: `${target:.6f}`\n"
-982|            
-983|            message += f"\n*STOP LOSS*\n"
-984|            message += f"🛑 `${signal['stop_loss']:.6f}`\n\n"
-985|            
-986|            message += f"━━━━━━━━━━━━━━━━━━━━\n"
-987|            message += f"*TRADE DETAILS*\n"
-988|            message += f"⚖️ Risk/Reward: `1:{rr_ratio:.1f}`\n"
-989|            message += f"📊 Leverage: `{signal['leverage']}x` (Conservative)\n"
-990|            message += f"💹 Potential: `+{potential_profit_tp1:.1f}%` to `+{potential_profit_tp3:.1f}%`\n\n"
-991|            
-992|            message += f"━━━━━━━━━━━━━━━━━━━━\n"
-993|            message += f"⚠️ *Risk Management:*\n"
-994|            message += f"• Use proper position sizing\n"
-995|            message += f"• Set stop loss immediately\n"
-996|            message += f"• Take partial profits at each TP\n\n"
-997|            
-998|            message += f"🕐 {timestamp_str}\n"
-999|            message += f"📈 Smart Money Concept Analysis"
-1000|            
-1001|            # ارسال به کانال
-1002|            sent_message = await self.bot.send_photo(
-1003|                chat_id=CHANNEL_ID,
-1004|                photo=chart_buffer,
-1005|                caption=message,
-1006|                parse_mode='Markdown'
-1007|            )
-1008|            
-1009|            # ذخیره سیگنال
-1010|            await self.save_signal(signal, sent_message.message_id)
-1011|            
-1012|            logger.info(f"✅ Signal sent: {symbol_name} {signal['direction']}")
-1013|            
-1014|        except TelegramError as e:
-1015|            logger.error(f"❌ Telegram error: {e}")
-1016|        except Exception as e:
-1017|            logger.error(f"❌ Error sending signal: {e}")
-1018|    
-1019|    async def scan_markets(self):
-1020|        """اسکن بازارها برای یافتن فرصت‌های معاملاتی با کیفیت بالا"""
-1021|        logger.info("🔍 Starting market scan...")
-1022|        
-1023|        # بررسی معاملات فعال
-1024|        active_trades = await self.check_active_trades()
-1025|        signals_found = 0
-1026|        
-1027|        for coin_id in SYMBOLS.keys():
-1028|            # اگر برای این coin معامله فعال داریم، اسکن نمی‌کنیم
-1029|            if coin_id in active_trades:
-1030|                logger.info(f"⏭️ {coin_id}: Active trade exists, skipping...")
-1031|                continue
-1032|            
-1033|            for timeframe in TIMEFRAMES:
-1034|                try:
-1035|                    logger.info(f"🔎 Analyzing {coin_id} on {timeframe}...")
-1036|                    signal = self.analyzer.generate_signal(coin_id, timeframe)
-1037|                    
-1038|                    if signal:
-1039|                        logger.info(f"✅ HIGH-QUALITY SIGNAL FOUND: {coin_id} {timeframe} {signal['direction']}")
-1040|                        await self.send_signal(signal)
-1041|                        signals_found += 1
-1042|                        
-1043|                        # برای هر coin فقط یک سیگنال در هر بار اسکن
-1044|                        break
-1045|                    
-1046|                    # کمی صبر کنیم تا rate limit نخوریم
-1047|                    await asyncio.sleep(2)
-1048|                    
-1049|                except Exception as e:
-1050|                    logger.error(f"❌ Error scanning {coin_id} {timeframe}: {e}")
-1051|                    continue
-1052|        
-1053|        logger.info(f"✅ Market scan completed. Signals found: {signals_found}")
-1054|    
-1055|    async def run(self):
-1056|        """اجرای ربات با مانیتورینگ حرفه‌ای"""
-1057|        logger.info("=" * 60)
-1058|        logger.info("🤖 Crypto Signal Bot Starting...")
-1059|        logger.info("📊 Strategy: Smart Money Concept (SMC)")
-1060|        logger.info("🎯 Focus: HIGH QUALITY signals only")
-1061|        logger.info("=" * 60)
-1062|        
-1063|        # تست اتصال
-1064|        try:
-1065|            me = await self.bot.get_me()
-1066|            logger.info(f"✅ Bot connected: @{me.username}")
-1067|            logger.info(f"📢 Channel: {CHANNEL_ID}")
-1068|        except Exception as e:
-1069|            logger.error(f"❌ Telegram connection failed: {e}")
-1070|            logger.error("Please check your BOT_TOKEN and internet connection")
-1071|            return
-1072|        
-1073|        # اطلاع‌رسانی وضعیت دیتابیس
-1074|        if USE_DATABASE:
-1075|            logger.info("💾 Database: MongoDB Enabled")
-1076|        else:
-1077|            logger.info("💾 Database: Disabled (Memory-only mode)")
-1078|        
-1079|        logger.info("=" * 60)
-1080|        logger.info("🚀 Bot is now running... Press Ctrl+C to stop")
-1081|        logger.info("=" * 60)
-1082|        
-1083|        while True:
-1084|            try:
-1085|                # اسکن بازارها
-1086|                await self.scan_markets()
-1087|                
-1088|                # بررسی معاملات فعال
-1089|                await self.monitor_active_trades()
-1090|                
-1091|                # استراحت 5 دقیقه
-1092|                logger.info("⏸️ Waiting 5 minutes before next scan...")
-1093|                await asyncio.sleep(300)
-1094|                
-1095|            except KeyboardInterrupt:
-1096|                logger.info("🛑 Bot stopped by user")
-1097|                break
-1098|            except Exception as e:
-1099|                logger.error(f"⚠️ Unexpected error: {e}")
-1100|                logger.info("🔄 Restarting in 60 seconds...")
-1101|                await asyncio.sleep(60)
-1102|
-1103|
-1104|async def main():
-1105|    """تابع اصلی"""
-1106|    bot = TelegramSignalBot()
-1107|    await bot.run()
-1108|
-1109|
-1110|if __name__ == "__main__":
-1111|    try:
-1112|        asyncio.run(main())
-1113|    except KeyboardInterrupt:
-1114|        logger.info("👋 Bot shutdown complete")
-1115|    except Exception as e:
-1116|        logger.error(f"❌ Fatal error: {e}")
-1117|
+545|            # Entry Point
+546|            entry_idx = len(df) - 1
+547|            entry_price = signal['entry_price']
+548|            entry_color = '#2962FF' if signal['direction'] == 'LONG' else '#F23645'
+549|            ax.plot(entry_idx, entry_price, 'D', color=entry_color, markersize=15, 
+550|                   markeredgecolor='white', markeredgewidth=2.5, label='ENTRY', zorder=6)
+551|            
+552|            ax.axhline(entry_price, color=entry_color, linestyle='-', 
+553|                      linewidth=2, alpha=0.5, zorder=1)
+554|            
+555|            # Stop Loss
+556|            ax.axhline(signal['stop_loss'], color='#F23645', linestyle='--', 
+557|                      linewidth=2.5, label=f"STOP LOSS", alpha=0.9, zorder=2)
+558|            
+559|            ax.text(len(df) - 8, signal['stop_loss'], f'SL: ${signal["stop_loss"]:,.2f}', 
+560|                   fontsize=10, fontweight='bold', color='#F23645',
+561|                   bbox=dict(boxstyle='round,pad=0.4', facecolor='white', 
+562|                            edgecolor='#F23645', linewidth=2), zorder=5)
+563|            
+564|            # Targets
+565|            target_colors = ['#26A69A', '#00897B', '#00695C']
+566|            for i, target in enumerate(signal['targets']):
+567|                ax.axhline(target, color=target_colors[i], linestyle='--', 
+568|                          linewidth=2.5, label=f"TARGET {i+1}", alpha=0.9, zorder=2)
+569|                
+570|                ax.text(len(df) - 5, target, f'TP{i+1}: ${target:,.2f}', 
+571|                       fontsize=10, fontweight='bold', color=target_colors[i],
+572|                       bbox=dict(boxstyle='round,pad=0.4', facecolor='white', 
+573|                                edgecolor=target_colors[i], linewidth=2), 
+574|                       ha='center', zorder=5)
+575|            
+576|            # Grid
+577|            ax.grid(True, alpha=0.2, color='#E0E3EB', linestyle='-', linewidth=0.5)
+578|            ax.set_axisbelow(True)
+579|            
+580|            # Styling
+581|            ax.tick_params(colors='#131722', labelsize=11)
+582|            for spine in ax.spines.values():
+583|                spine.set_color('#E0E3EB')
+584|                spine.set_linewidth(1)
+585|            
+586|            # Title
+587|            direction_emoji = "🟢 LONG" if signal['direction'] == 'LONG' else "🔴 SHORT"
+588|            coin_data = SYMBOLS.get(signal['coin_id'])
+589|            title_name = coin_data['name'] if coin_data else signal['symbol']
+590|            
+591|            title = f"{direction_emoji} | {title_name} ({signal['symbol']}) | {signal['timeframe'].upper()}"
+592|            subtitle = f"Smart Money Concept | R/R: 1:{signal.get('rr_ratio', 0):.1f}"
+593|            
+594|            ax.set_title(title, color='#131722', fontsize=20, fontweight='bold', pad=15)
+595|            ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, 
+596|                   fontsize=12, ha='center', color='#787B86')
+597|            
+598|            ax.set_xlabel('Time Period', color='#131722', fontsize=13, fontweight='bold')
+599|            ax.set_ylabel('Price (USDT)', color='#131722', fontsize=13, fontweight='bold')
+600|            
+601|            # Legend
+602|            legend = ax.legend(loc='upper left', fontsize=9, framealpha=0.95, 
+603|                              facecolor='white', edgecolor='#E0E3EB', 
+604|                              shadow=True, ncol=2)
+605|            legend.get_frame().set_linewidth(1.5)
+606|            
+607|            plt.tight_layout()
+608|            
+609|            buf = io.BytesIO()
+610|            plt.savefig(buf, format='png', dpi=150, facecolor='#ffffff', 
+611|                       edgecolor='none', bbox_inches='tight')
+612|            buf.seek(0)
+613|            plt.close()
+614|            
+615|            return buf
+616|            
+617|        except Exception as e:
+618|            logger.error(f"❌ Error creating chart: {e}")
+619|            return None
+620|
+621|
+622|class TelegramSignalBot:
+623|    """Telegram signal bot"""
+624|    
+625|    def __init__(self):
+626|        self.bot = Bot(token=BOT_TOKEN)
+627|        self.analyzer = SmartMoneyAnalyzer()
+628|        self.chart_gen = ChartGenerator()
+629|        self.active_trades_cache = {}
+630|        
+631|    async def check_active_trades(self) -> Dict[str, Dict]:
+632|        """Check active trades from cache"""
+633|        return self.active_trades_cache
+634|    
+635|    async def save_signal(self, signal: Dict, message_id: int):
+636|        """Save signal to cache"""
+637|        signal_doc = {
+638|            'coin_id': signal['coin_id'],
+639|            'symbol': signal['symbol'],
+640|            'timeframe': signal['timeframe'],
+641|            'direction': signal['direction'],
+642|            'entry_price': signal['entry_price'],
+643|            'stop_loss': signal['stop_loss'],
+644|            'targets': signal['targets'],
+645|            'leverage': signal['leverage'],
+646|            'message_id': message_id,
+647|            'status': 'ACTIVE',
+648|            'targets_hit': [],
+649|            'created_at': datetime.now(timezone.utc).isoformat()
+650|        }
+651|        
+652|        self.active_trades_cache[signal['coin_id']] = signal_doc
+653|        logger.info(f"✅ Signal cached: {signal['symbol']} {signal['direction']}")
+654|    
+655|    async def update_trade_status(self, coin_id: str, status: str, hit_target: Optional[int] = None):
+656|        """Update trade status in cache"""
+657|        if coin_id in self.active_trades_cache:
+658|            if hit_target:
+659|                if 'targets_hit' not in self.active_trades_cache[coin_id]:
+660|                    self.active_trades_cache[coin_id]['targets_hit'] = []
+661|                self.active_trades_cache[coin_id]['targets_hit'].append(hit_target)
+662|            else:
+663|                self.active_trades_cache[coin_id]['status'] = status
+664|    
+665|    async def monitor_active_trades(self):
+666|        """Monitor active trades and check TP/SL"""
+667|        active_trades = await self.check_active_trades()
+668|        
+669|        if not active_trades:
+670|            return
+671|        
+672|        for coin_id, trade in active_trades.items():
+673|            try:
+674|                current_price = data_fetcher.get_current_price(coin_id)
+675|                
+676|                if current_price is None:
+677|                    continue
+678|                
+679|                # Check Stop Loss
+680|                if trade['direction'] == 'LONG':
+681|                    if current_price <= trade['stop_loss']:
+682|                        await self.send_trade_update(trade, 'STOP_LOSS', current_price)
+683|                        await self.update_trade_status(coin_id, 'CLOSED_SL')
+684|                        if coin_id in self.active_trades_cache:
+685|                            del self.active_trades_cache[coin_id]
+686|                        continue
+687|                    
+688|                    # Check Targets
+689|                    for i, target in enumerate(trade['targets'], 1):
+690|                        if current_price >= target and i not in trade.get('targets_hit', []):
+691|                            await self.send_trade_update(trade, f'TARGET_{i}', current_price)
+692|                            await self.update_trade_status(coin_id, 'ACTIVE', i)
+693|                            
+694|                            if i == len(trade['targets']):
+695|                                await self.update_trade_status(coin_id, 'CLOSED_TP')
+696|                                if coin_id in self.active_trades_cache:
+697|                                    del self.active_trades_cache[coin_id]
+698|                
+699|                else:  # SHORT
+700|                    if current_price >= trade['stop_loss']:
+701|                        await self.send_trade_update(trade, 'STOP_LOSS', current_price)
+702|                        await self.update_trade_status(coin_id, 'CLOSED_SL')
+703|                        if coin_id in self.active_trades_cache:
+704|                            del self.active_trades_cache[coin_id]
+705|                        continue
+706|                    
+707|                    for i, target in enumerate(trade['targets'], 1):
+708|                        if current_price <= target and i not in trade.get('targets_hit', []):
+709|                            await self.send_trade_update(trade, f'TARGET_{i}', current_price)
+710|                            await self.update_trade_status(coin_id, 'ACTIVE', i)
+711|                            
+712|                            if i == len(trade['targets']):
+713|                                await self.update_trade_status(coin_id, 'CLOSED_TP')
+714|                                if coin_id in self.active_trades_cache:
+715|                                    del self.active_trades_cache[coin_id]
+716|            
+717|            except Exception as e:
+718|                logger.error(f"❌ Error monitoring {coin_id}: {e}")
+719|    
+720|    async def send_trade_update(self, trade: Dict, update_type: str, current_price: float):
+721|        """Send trade update to channel"""
+722|        try:
+723|            coin_id = trade.get('coin_id', '')
+724|            coin_data = SYMBOLS.get(coin_id, {})
+725|            symbol_name = coin_data.get('name', trade['symbol'])
+726|            
+727|            if update_type == 'STOP_LOSS':
+728|                emoji = "🛑"
+729|                loss_percent = abs((current_price - trade['entry_price']) / trade['entry_price'] * 100)
+730|                message = f"{emoji} *STOP LOSS HIT*\n\n"
+731|                message += f"*{symbol_name}* {trade['direction']}\n"
+732|                message += f"Entry: `${trade['entry_price']:,.2f}`\n"
+733|                message += f"Exit: `${current_price:,.2f}`\n"
+734|                message += f"Loss: *-{loss_percent:.2f}%*"
+735|            
+736|            elif 'TARGET' in update_type:
+737|                target_num = int(update_type.split('_')[1])
+738|                emoji = "✅" if target_num == 1 else "🎯"
+739|                
+740|                profit_percent = abs((current_price - trade['entry_price']) / trade['entry_price'] * 100)
+741|                leverage_profit = profit_percent * trade.get('leverage', 1)
+742|                
+743|                message = f"{emoji} *TARGET {target_num} HIT*\n\n"
+744|                message += f"*{symbol_name}* {trade['direction']}\n"
+745|                message += f"Entry: `${trade['entry_price']:,.2f}`\n"
+746|                message += f"Target: `${current_price:,.2f}`\n"
+747|                message += f"Profit: *+{profit_percent:.2f}%*\n"
+748|                message += f"With {trade.get('leverage', 1)}x: *+{leverage_profit:.2f}%*"
+749|                
+750|                if target_num == len(trade['targets']):
+751|                    message += f"\n\n🎉 *ALL TARGETS HIT!*"
+752|            
+753|            await self.bot.send_message(
+754|                chat_id=CHANNEL_ID,
+755|                text=message,
+756|                parse_mode='Markdown',
+757|                reply_to_message_id=trade['message_id']
+758|            )
+759|            
+760|            logger.info(f"✅ Update sent: {symbol_name} - {update_type}")
+761|            
+762|        except Exception as e:
+763|            logger.error(f"❌ Error sending update: {e}")
+764|    
+765|    async def send_signal(self, signal: Dict):
+766|        """Send signal to Telegram channel - Simplified format"""
+767|        try:
+768|            chart_buffer = self.chart_gen.create_chart(signal)
+769|            
+770|            if not chart_buffer:
+771|                return
+772|            
+773|            coin_data = SYMBOLS.get(signal['coin_id'])
+774|            symbol_name = coin_data['name'] if coin_data else signal['symbol']
+775|            
+776|            direction_emoji = "🟢" if signal['direction'] == 'LONG' else "🔴"
+777|            
+778|            rr_ratio = signal.get('rr_ratio', 2.0)
+779|            potential_profit = abs(signal['targets'][0] - signal['entry_price']) / signal['entry_price'] * 100
+780|            
+781|            # Simplified message with proper price formatting
+782|            message = f"{direction_emoji} *{signal['direction']}* | {symbol_name} | {signal['timeframe'].upper()}\n\n"
+783|            
+784|            message += f"📍 *Entry:* `${signal['entry_price']:,.2f}`\n\n"
+785|            
+786|            message += f"🎯 *Targets:*\n"
+787|            for i, target in enumerate(signal['targets'], 1):
+788|                message += f"TP{i}: `${target:,.2f}`\n"
+789|            
+790|            message += f"\n🛑 *Stop Loss:* `${signal['stop_loss']:,.2f}`\n\n"
+791|            
+792|            message += f"⚖️ Risk/Reward: `1:{rr_ratio:.1f}`\n"
+793|            message += f"📊 Leverage: `{signal['leverage']}x`\n"
+794|            message += f"💹 Potential: `+{potential_profit:.1f}%+`"
+795|            
+796|            sent_message = await self.bot.send_photo(
+797|                chat_id=CHANNEL_ID,
+798|                photo=chart_buffer,
+799|                caption=message,
+800|                parse_mode='Markdown'
+801|            )
+802|            
+803|            await self.save_signal(signal, sent_message.message_id)
+804|            
+805|            logger.info(f"✅ Signal sent: {symbol_name} {signal['direction']}")
+806|            
+807|        except TelegramError as e:
+808|            logger.error(f"❌ Telegram error: {e}")
+809|        except Exception as e:
+810|            logger.error(f"❌ Error sending signal: {e}")
+811|    
+812|    async def scan_markets(self):
+813|        """Scan markets for trading opportunities"""
+814|        logger.info("🔍 Scanning markets...")
+815|        
+816|        active_trades = await self.check_active_trades()
+817|        signals_found = 0
+818|        
+819|        for coin_id in SYMBOLS.keys():
+820|            if coin_id in active_trades:
+821|                continue
+822|            
+823|            for timeframe in TIMEFRAMES:
+824|                try:
+825|                    logger.info(f"🔎 Analyzing {coin_id} {timeframe}...")
+826|                    signal = self.analyzer.generate_signal(coin_id, timeframe)
+827|                    
+828|                    if signal:
+829|                        logger.info(f"✅ SIGNAL FOUND: {coin_id} {timeframe} {signal['direction']}")
+830|                        await self.send_signal(signal)
+831|                        signals_found += 1
+832|                        break
+833|                    
+834|                    await asyncio.sleep(2)
+835|                    
+836|                except Exception as e:
+837|                    logger.error(f"❌ Error scanning {coin_id} {timeframe}: {e}")
+838|                    continue
+839|        
+840|        logger.info(f"✅ Scan completed. Signals: {signals_found}")
+841|    
+842|    async def run(self):
+843|        """Run the bot"""
+844|        logger.info("=" * 60)
+845|        logger.info("🤖 Crypto Signal Bot Starting...")
+846|        logger.info("📊 Strategy: Smart Money Concept")
+847|        logger.info("=" * 60)
+848|        
+849|        try:
+850|            me = await self.bot.get_me()
+851|            logger.info(f"✅ Bot connected: @{me.username}")
+852|            logger.info(f"📢 Channel: {CHANNEL_ID}")
+853|        except Exception as e:
+854|            logger.error(f"❌ Connection failed: {e}")
+855|            return
+856|        
+857|        logger.info("=" * 60)
+858|        logger.info("🚀 Bot running... Press Ctrl+C to stop")
+859|        logger.info("=" * 60)
+860|        
+861|        while True:
+862|            try:
+863|                await self.scan_markets()
+864|                await self.monitor_active_trades()
+865|                
+866|                logger.info("⏸️ Waiting 5 minutes...")
+867|                await asyncio.sleep(300)
+868|                
+869|            except KeyboardInterrupt:
+870|                logger.info("🛑 Bot stopped")
+871|                break
+872|            except Exception as e:
+873|                logger.error(f"⚠️ Error: {e}")
+874|                await asyncio.sleep(60)
+875|
+876|
+877|async def main():
+878|    """Main function"""
+879|    bot = TelegramSignalBot()
+880|    await bot.run()
+881|
+882|
+883|if __name__ == "__main__":
+884|    try:
+885|        asyncio.run(main())
+886|    except KeyboardInterrupt:
+887|        logger.info("👋 Shutdown complete")
+888|    except Exception as e:
+889|        logger.error(f"❌ Fatal error: {e}")
+890|
