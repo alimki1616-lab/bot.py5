@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Bot Configuration
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8363442271:AAHGrIjbCz1PX10qERyRecxY6UUxbfW-8Es')
-CHANNEL_ID = os.environ.get('CHANNEL_ID', '@Livepricee')
+CHANNEL_ID = os.environ.get('CHANNEL_ID', '@CryptoAnalysis_Ai')
 
 logger.info(f"✅ Bot Token loaded: {BOT_TOKEN[:10]}...")
 logger.info(f"✅ Channel ID: {CHANNEL_ID}")
