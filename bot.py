@@ -34,7 +34,7 @@ CHANNEL_ID = os.environ.get('CHANNEL_ID', '@CryptoAnalysis_Ai')
 logger.info(f"✅ Bot Token loaded: {BOT_TOKEN[:10]}...")
 logger.info(f"✅ Channel ID: {CHANNEL_ID}")
 
-# Trading pairs - Using Binance tickers
+# Trading pairs - Top 7 cryptos
 SYMBOLS = {
     'BTCUSDT': {'name': 'Bitcoin', 'ticker': 'BTC'},
     'ETHUSDT': {'name': 'Ethereum', 'ticker': 'ETH'},
@@ -45,9 +45,12 @@ SYMBOLS = {
     'XRPUSDT': {'name': 'Ripple', 'ticker': 'XRP'}
 }
 
+# Extended timeframes
 TIMEFRAMES = {
+    '5m': '5m',
     '15m': '15m',
-    '1h': '1h'
+    '1h': '1h',
+    '4h': '4h'
 }
 
 
@@ -126,7 +129,7 @@ class BinanceDataFetcher:
                 return None
             
             # Map interval
-            interval_map = {'15m': '15m', '1h': '1h', '4h': '4h', '1d': '1D'}
+            interval_map = {'5m': '5m', '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1D'}
             timeframe = interval_map.get(interval, '1h')
             
             url = f"{self.cryptocom_url}/public/get-candlestick"
@@ -172,7 +175,7 @@ class BinanceDataFetcher:
             logger.error(f"Crypto.com error: {e}")
             return None
         
-    async def get_ohlcv(self, symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
+    async def get_ohlcv(self, symbol: str, interval: str, limit: int = 300) -> pd.DataFrame:
         """Get OHLCV data with fallback mechanism"""
         # Try Binance first (all endpoints)
         for base_url in self.binance_urls:
@@ -232,35 +235,143 @@ class BinanceDataFetcher:
 data_fetcher = BinanceDataFetcher()
 
 
-class SmartMoneyAnalyzer:
-    """Enhanced Smart Money Concept Analyzer with optimized filters"""
+class AdvancedSmartMoneyAnalyzer:
+    """Advanced Smart Money Analyzer with Multiple Filters and Strong Strategy"""
     
     def __init__(self):
         self.lookback_periods = 50
-        self.min_rr_ratio = 1.8  # More aggressive R/R for faster signals
-        self.volume_threshold = 1.3  # Slightly lower for more signals
+        self.min_rr_ratio = 2.5  # Higher R/R for quality
+        self.volume_threshold = 1.5  # Higher volume requirement
+        self.min_confirmations = 4  # Minimum confirmations required
         
+    def calculate_ema(self, df: pd.DataFrame, period: int) -> pd.Series:
+        """Calculate EMA"""
+        return df['close'].ewm(span=period, adjust=False).mean()
+    
+    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calculate Average True Range"""
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = np.max(ranges, axis=1)
+        atr = true_range.rolling(period).mean().iloc[-1]
+        
+        return atr
+    
+    def calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calculate RSI"""
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi.iloc[-1]
+    
+    def calculate_macd(self, df: pd.DataFrame) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """Calculate MACD (12, 26, 9)"""
+        ema_12 = df['close'].ewm(span=12, adjust=False).mean()
+        ema_26 = df['close'].ewm(span=26, adjust=False).mean()
+        
+        macd_line = ema_12 - ema_26
+        signal_line = macd_line.ewm(span=9, adjust=False).mean()
+        histogram = macd_line - signal_line
+        
+        return macd_line, signal_line, histogram
+    
+    def calculate_bollinger_bands(self, df: pd.DataFrame, period: int = 20, std: float = 2.0) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """Calculate Bollinger Bands"""
+        sma = df['close'].rolling(window=period).mean()
+        rolling_std = df['close'].rolling(window=period).std()
+        
+        upper_band = sma + (rolling_std * std)
+        lower_band = sma - (rolling_std * std)
+        
+        return upper_band, sma, lower_band
+    
+    def calculate_stochastic_rsi(self, df: pd.DataFrame, period: int = 14, smooth_k: int = 3, smooth_d: int = 3) -> Tuple[float, float]:
+        """Calculate Stochastic RSI"""
+        # First calculate RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Then apply Stochastic formula to RSI
+        rsi_min = rsi.rolling(window=period).min()
+        rsi_max = rsi.rolling(window=period).max()
+        
+        stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min) * 100
+        stoch_rsi = stoch_rsi.fillna(50)
+        
+        # Smooth with K and D
+        k_line = stoch_rsi.rolling(window=smooth_k).mean()
+        d_line = k_line.rolling(window=smooth_d).mean()
+        
+        return k_line.iloc[-1], d_line.iloc[-1]
+    
+    def calculate_adx(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calculate ADX (Average Directional Index) - Trend Strength"""
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        # Calculate +DM and -DM
+        plus_dm = high.diff()
+        minus_dm = -low.diff()
+        
+        plus_dm[plus_dm < 0] = 0
+        minus_dm[minus_dm < 0] = 0
+        
+        # Calculate True Range
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        # Smooth with Wilder's smoothing
+        atr = tr.rolling(window=period).mean()
+        
+        plus_di = 100 * (plus_dm.rolling(window=period).mean() / atr)
+        minus_di = 100 * (minus_dm.rolling(window=period).mean() / atr)
+        
+        # Calculate DX and ADX
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=period).mean()
+        
+        return adx.iloc[-1] if not pd.isna(adx.iloc[-1]) else 0
+    
     def detect_swing_points(self, df: pd.DataFrame) -> Tuple[List, List]:
-        """Detect Swing Highs and Swing Lows"""
+        """Detect Swing Highs and Swing Lows - More conservative"""
         swing_highs = []
         swing_lows = []
         
-        for i in range(2, len(df) - 2):
-            # Balanced swing detection with 2 candles on each side
+        # Use 3 candles on each side for stronger swings
+        for i in range(3, len(df) - 3):
+            # Swing High: higher than 3 candles on each side
             if (df['high'].iloc[i] > df['high'].iloc[i-1] and 
                 df['high'].iloc[i] > df['high'].iloc[i-2] and
+                df['high'].iloc[i] > df['high'].iloc[i-3] and
                 df['high'].iloc[i] > df['high'].iloc[i+1] and 
-                df['high'].iloc[i] > df['high'].iloc[i+2]):
+                df['high'].iloc[i] > df['high'].iloc[i+2] and
+                df['high'].iloc[i] > df['high'].iloc[i+3]):
                 swing_highs.append({
                     'index': i,
                     'price': df['high'].iloc[i],
                     'time': df.index[i]
                 })
             
+            # Swing Low: lower than 3 candles on each side
             if (df['low'].iloc[i] < df['low'].iloc[i-1] and 
                 df['low'].iloc[i] < df['low'].iloc[i-2] and
+                df['low'].iloc[i] < df['low'].iloc[i-3] and
                 df['low'].iloc[i] < df['low'].iloc[i+1] and 
-                df['low'].iloc[i] < df['low'].iloc[i+2]):
+                df['low'].iloc[i] < df['low'].iloc[i+2] and
+                df['low'].iloc[i] < df['low'].iloc[i+3]):
                 swing_lows.append({
                     'index': i,
                     'price': df['low'].iloc[i],
@@ -269,73 +380,109 @@ class SmartMoneyAnalyzer:
         
         return swing_highs, swing_lows
     
-    def detect_bos_choch(self, df: pd.DataFrame, swing_highs: List, swing_lows: List) -> Dict:
-        """Detect Break of Structure (BOS)"""
-        if len(swing_highs) < 2 or len(swing_lows) < 2:
+    def detect_strong_bos(self, df: pd.DataFrame, swing_highs: List, swing_lows: List) -> Dict:
+        """Detect Strong Break of Structure - Requires multiple confirmations"""
+        if len(swing_highs) < 3 or len(swing_lows) < 3:
             return None
         
-        last_swing_high = swing_highs[-1]['price']
-        last_swing_low = swing_lows[-1]['price']
         current_price = df['close'].iloc[-1]
+        prev_close = df['close'].iloc[-2]
         
-        # Bullish BOS
-        if current_price > last_swing_high:
+        # Get last 2 swing highs and lows
+        last_swing_high = swing_highs[-1]['price']
+        prev_swing_high = swing_highs[-2]['price'] if len(swing_highs) >= 2 else last_swing_high
+        
+        last_swing_low = swing_lows[-1]['price']
+        prev_swing_low = swing_lows[-2]['price'] if len(swing_lows) >= 2 else last_swing_low
+        
+        # Strong Bullish BOS: Break previous high with confirmation
+        if current_price > last_swing_high and prev_close < last_swing_high:
+            # Check if we also broke previous swing high (double confirmation)
+            if len(swing_highs) >= 2 and current_price > prev_swing_high:
+                return {
+                    'type': 'STRONG_BOS_BULLISH',
+                    'signal': 'LONG',
+                    'level': last_swing_high,
+                    'strength': 'VERY_STRONG',
+                    'broken_levels': 2
+                }
             return {
                 'type': 'BOS_BULLISH',
                 'signal': 'LONG',
                 'level': last_swing_high,
-                'strength': 'STRONG'
+                'strength': 'STRONG',
+                'broken_levels': 1
             }
         
-        # Bearish BOS
-        if current_price < last_swing_low:
+        # Strong Bearish BOS: Break previous low with confirmation
+        if current_price < last_swing_low and prev_close > last_swing_low:
+            # Check if we also broke previous swing low (double confirmation)
+            if len(swing_lows) >= 2 and current_price < prev_swing_low:
+                return {
+                    'type': 'STRONG_BOS_BEARISH',
+                    'signal': 'SHORT',
+                    'level': last_swing_low,
+                    'strength': 'VERY_STRONG',
+                    'broken_levels': 2
+                }
             return {
                 'type': 'BOS_BEARISH',
                 'signal': 'SHORT',
                 'level': last_swing_low,
-                'strength': 'STRONG'
+                'strength': 'STRONG',
+                'broken_levels': 1
             }
         
         return None
     
     def detect_order_blocks(self, df: pd.DataFrame, signal_type: str) -> Optional[Dict]:
-        """Detect Order Blocks"""
+        """Detect High-Quality Order Blocks"""
         order_blocks = []
         
         for i in range(len(df) - 10, len(df) - 1):
             candle = df.iloc[i]
             next_candle = df.iloc[i + 1]
             
+            candle_body = abs(candle['close'] - candle['open'])
+            next_body = abs(next_candle['close'] - next_candle['open'])
+            
             if signal_type == 'LONG':
-                # Bearish candle followed by bullish move
+                # Strong bearish candle followed by strong bullish impulse
                 if (candle['close'] < candle['open'] and 
                     next_candle['close'] > next_candle['open'] and
-                    (next_candle['close'] - next_candle['open']) > 1.3 * abs(candle['close'] - candle['open'])):
+                    next_body > 1.5 * candle_body and
+                    candle['volume'] > df['volume'].tail(20).mean()):
                     order_blocks.append({
                         'type': 'BULLISH_OB',
                         'high': candle['high'],
                         'low': candle['low'],
                         'index': i,
-                        'volume': candle['volume']
+                        'volume': candle['volume'],
+                        'strength': next_body / candle_body
                     })
             
             elif signal_type == 'SHORT':
-                # Bullish candle followed by bearish move
+                # Strong bullish candle followed by strong bearish impulse
                 if (candle['close'] > candle['open'] and 
                     next_candle['close'] < next_candle['open'] and
-                    (next_candle['open'] - next_candle['close']) > 1.3 * abs(candle['close'] - candle['open'])):
+                    next_body > 1.5 * candle_body and
+                    candle['volume'] > df['volume'].tail(20).mean()):
                     order_blocks.append({
                         'type': 'BEARISH_OB',
                         'high': candle['high'],
                         'low': candle['low'],
                         'index': i,
-                        'volume': candle['volume']
+                        'volume': candle['volume'],
+                        'strength': next_body / candle_body
                     })
         
-        return order_blocks[-1] if order_blocks else None
+        # Return strongest order block
+        if order_blocks:
+            return max(order_blocks, key=lambda x: x['strength'])
+        return None
     
     def detect_fvg(self, df: pd.DataFrame) -> List[Dict]:
-        """Detect Fair Value Gaps"""
+        """Detect Fair Value Gaps - Higher threshold"""
         fvgs = []
         
         for i in range(1, len(df) - 1):
@@ -343,27 +490,32 @@ class SmartMoneyAnalyzer:
             next_candle = df.iloc[i + 1]
             
             # Bullish FVG - Gap up
-            if next_candle['low'] > prev_candle['high']:
-                gap_size = next_candle['low'] - prev_candle['high']
-                if gap_size > 0:
+            gap_up = next_candle['low'] - prev_candle['high']
+            if gap_up > 0:
+                # Calculate gap as percentage of price
+                gap_percent = (gap_up / prev_candle['high']) * 100
+                if gap_percent > 0.2:  # At least 0.2% gap
                     fvgs.append({
                         'type': 'BULLISH_FVG',
                         'top': next_candle['low'],
                         'bottom': prev_candle['high'],
                         'index': i,
-                        'size': gap_size
+                        'size': gap_up,
+                        'percent': gap_percent
                     })
             
             # Bearish FVG - Gap down
-            if next_candle['high'] < prev_candle['low']:
-                gap_size = prev_candle['low'] - next_candle['high']
-                if gap_size > 0:
+            gap_down = prev_candle['low'] - next_candle['high']
+            if gap_down > 0:
+                gap_percent = (gap_down / prev_candle['low']) * 100
+                if gap_percent > 0.2:
                     fvgs.append({
                         'type': 'BEARISH_FVG',
                         'top': prev_candle['low'],
                         'bottom': next_candle['high'],
                         'index': i,
-                        'size': gap_size
+                        'size': gap_down,
+                        'percent': gap_percent
                     })
         
         return fvgs[-3:] if fvgs else []
@@ -400,119 +552,239 @@ class SmartMoneyAnalyzer:
             'current': current_price
         }
     
-    def calculate_ema(self, df: pd.DataFrame, period: int) -> pd.Series:
-        """Calculate EMA"""
-        return df['close'].ewm(span=period, adjust=False).mean()
+    def check_macd_confirmation(self, df: pd.DataFrame, signal_direction: str) -> bool:
+        """MACD Confirmation Filter"""
+        macd_line, signal_line, histogram = self.calculate_macd(df)
+        
+        current_macd = macd_line.iloc[-1]
+        current_signal = signal_line.iloc[-1]
+        current_hist = histogram.iloc[-1]
+        prev_hist = histogram.iloc[-2]
+        
+        if signal_direction == 'LONG':
+            # Bullish: MACD above signal and histogram increasing
+            return current_macd > current_signal and current_hist > prev_hist and current_hist > 0
+        else:
+            # Bearish: MACD below signal and histogram decreasing
+            return current_macd < current_signal and current_hist < prev_hist and current_hist < 0
     
-    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-        """Calculate Average True Range"""
-        high_low = df['high'] - df['low']
-        high_close = np.abs(df['high'] - df['close'].shift())
-        low_close = np.abs(df['low'] - df['close'].shift())
+    def check_bollinger_confirmation(self, df: pd.DataFrame, signal_direction: str) -> bool:
+        """Bollinger Bands Confirmation Filter"""
+        upper, middle, lower = self.calculate_bollinger_bands(df)
         
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        atr = true_range.rolling(period).mean().iloc[-1]
+        current_price = df['close'].iloc[-1]
+        current_upper = upper.iloc[-1]
+        current_lower = lower.iloc[-1]
+        current_middle = middle.iloc[-1]
         
-        return atr
+        if signal_direction == 'LONG':
+            # For long: price should be near lower band or bouncing from it
+            return current_price <= (current_lower * 1.02) or (current_price > current_lower and current_price < current_middle)
+        else:
+            # For short: price should be near upper band or rejecting from it
+            return current_price >= (current_upper * 0.98) or (current_price < current_upper and current_price > current_middle)
     
-    def calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> float:
-        """Calculate RSI"""
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    def check_stochastic_rsi_confirmation(self, df: pd.DataFrame, signal_direction: str) -> bool:
+        """Stochastic RSI Confirmation Filter"""
+        k_line, d_line = self.calculate_stochastic_rsi(df)
         
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
+        if signal_direction == 'LONG':
+            # For long: StochRSI should be oversold (<30) or crossing up
+            return k_line < 40 or (k_line > d_line and k_line < 60)
+        else:
+            # For short: StochRSI should be overbought (>70) or crossing down
+            return k_line > 60 or (k_line < d_line and k_line > 40)
+    
+    def check_adx_confirmation(self, df: pd.DataFrame) -> bool:
+        """ADX Confirmation - Trend Strength"""
+        adx = self.calculate_adx(df)
         
-        return rsi.iloc[-1]
+        # ADX > 25 indicates strong trend
+        return adx > 25
     
     def check_volume_confirmation(self, df: pd.DataFrame) -> bool:
-        """Volume confirmation"""
+        """Strong Volume Confirmation"""
         if len(df) < 20:
             return False
         
         avg_volume = df['volume'].tail(20).mean()
         recent_volume = df['volume'].tail(5).mean()
         
-        # Recent volume should be above average
+        # Recent volume should be significantly above average
         return recent_volume >= (avg_volume * self.volume_threshold)
     
     def check_trend_alignment(self, df: pd.DataFrame, signal_direction: str) -> bool:
-        """Check trend alignment with EMAs - More lenient"""
+        """Strong Trend Alignment with EMAs"""
         ema_20 = self.calculate_ema(df, 20)
         ema_50 = self.calculate_ema(df, 50)
+        ema_200 = self.calculate_ema(df, 200)
         
         current_price = df['close'].iloc[-1]
         
         if signal_direction == 'LONG':
-            # Bullish: price > EMA20 OR close to EMA50
-            return current_price > ema_20.iloc[-1] or current_price > (ema_50.iloc[-1] * 0.98)
+            # Strong bullish: price > EMA20 > EMA50 > EMA200
+            return (current_price > ema_20.iloc[-1] and 
+                    ema_20.iloc[-1] > ema_50.iloc[-1] and
+                    ema_50.iloc[-1] > ema_200.iloc[-1])
         else:
-            # Bearish: price < EMA20 OR close to EMA50
-            return current_price < ema_20.iloc[-1] or current_price < (ema_50.iloc[-1] * 1.02)
+            # Strong bearish: price < EMA20 < EMA50 < EMA200
+            return (current_price < ema_20.iloc[-1] and 
+                    ema_20.iloc[-1] < ema_50.iloc[-1] and
+                    ema_50.iloc[-1] < ema_200.iloc[-1])
     
     def check_momentum(self, df: pd.DataFrame, signal_direction: str) -> bool:
-        """Check momentum with RSI - More lenient"""
+        """Momentum Check with RSI"""
         rsi = self.calculate_rsi(df)
         
         if signal_direction == 'LONG':
-            # For long: RSI should be between 30-80
-            return 30 <= rsi <= 80
+            # For long: RSI between 40-70 (not overbought, some room to grow)
+            return 40 <= rsi <= 70
         else:
-            # For short: RSI should be between 20-70
-            return 20 <= rsi <= 70
+            # For short: RSI between 30-60 (not oversold, some room to fall)
+            return 30 <= rsi <= 60
+    
+    async def get_higher_timeframe_confirmation(self, symbol: str, current_tf: str, signal_direction: str) -> bool:
+        """Multi-Timeframe Confirmation - Check higher timeframe"""
+        # Map to higher timeframe
+        tf_hierarchy = {'5m': '15m', '15m': '1h', '1h': '4h'}
+        higher_tf = tf_hierarchy.get(current_tf)
+        
+        if not higher_tf:
+            return True  # No higher TF available (4h case)
+        
+        try:
+            df_higher = await data_fetcher.get_ohlcv(symbol, higher_tf, limit=100)
+            if df_higher is None or len(df_higher) < 50:
+                return True  # Can't verify, allow signal
+            
+            df_higher.set_index('timestamp', inplace=True)
+            
+            ema_20 = self.calculate_ema(df_higher, 20)
+            ema_50 = self.calculate_ema(df_higher, 50)
+            current_price = df_higher['close'].iloc[-1]
+            
+            if signal_direction == 'LONG':
+                # Higher TF should also be bullish
+                return current_price > ema_20.iloc[-1] and ema_20.iloc[-1] > ema_50.iloc[-1]
+            else:
+                # Higher TF should also be bearish
+                return current_price < ema_20.iloc[-1] and ema_20.iloc[-1] < ema_50.iloc[-1]
+        
+        except Exception as e:
+            logger.error(f"MTF check error: {e}")
+            return True  # Allow signal if can't verify
     
     async def generate_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
-        """Generate trading signal with optimized filters for faster but accurate signals"""
+        """Generate trading signal with STRONG multi-filter strategy"""
         try:
-            df = await data_fetcher.get_ohlcv(symbol, timeframe, limit=250)
+            df = await data_fetcher.get_ohlcv(symbol, timeframe, limit=300)
             
             if df is None or len(df) < 200:
                 return None
             
             df.set_index('timestamp', inplace=True)
             
+            # Detect swing points
             swing_highs, swing_lows = self.detect_swing_points(df)
             
             if len(swing_highs) < 5 or len(swing_lows) < 5:
                 return None
             
-            structure = self.detect_bos_choch(df, swing_highs, swing_lows)
+            # Check for strong BOS
+            structure = self.detect_strong_bos(df, swing_highs, swing_lows)
             
-            if not structure or structure.get('strength') != 'STRONG':
+            if not structure or structure.get('strength') not in ['STRONG', 'VERY_STRONG']:
                 return None
             
-            # Volume confirmation
-            volume_confirmed = self.check_volume_confirmation(df)
-            if not volume_confirmed:
-                logger.debug(f"❌ {symbol} - Volume not confirmed")
+            signal_direction = structure['signal']
+            
+            # ============ MULTIPLE CONFIRMATION FILTERS ============
+            confirmations = 0
+            confirmation_details = {}
+            
+            # 1. Volume Confirmation
+            volume_ok = self.check_volume_confirmation(df)
+            if volume_ok:
+                confirmations += 1
+                confirmation_details['volume'] = True
+            else:
+                logger.debug(f"❌ {symbol} - Volume filter failed")
+                return None  # MANDATORY
+            
+            # 2. Trend Alignment
+            trend_ok = self.check_trend_alignment(df, signal_direction)
+            if trend_ok:
+                confirmations += 1
+                confirmation_details['trend'] = True
+            else:
+                logger.debug(f"❌ {symbol} - Trend alignment failed")
+                return None  # MANDATORY
+            
+            # 3. ADX - Trend Strength
+            adx_ok = self.check_adx_confirmation(df)
+            if adx_ok:
+                confirmations += 1
+                confirmation_details['adx'] = True
+            
+            # 4. MACD Confirmation
+            macd_ok = self.check_macd_confirmation(df, signal_direction)
+            if macd_ok:
+                confirmations += 1
+                confirmation_details['macd'] = True
+            
+            # 5. Bollinger Bands
+            bb_ok = self.check_bollinger_confirmation(df, signal_direction)
+            if bb_ok:
+                confirmations += 1
+                confirmation_details['bollinger'] = True
+            
+            # 6. Stochastic RSI
+            stoch_ok = self.check_stochastic_rsi_confirmation(df, signal_direction)
+            if stoch_ok:
+                confirmations += 1
+                confirmation_details['stochastic'] = True
+            
+            # 7. Momentum (RSI)
+            momentum_ok = self.check_momentum(df, signal_direction)
+            if momentum_ok:
+                confirmations += 1
+                confirmation_details['momentum'] = True
+            
+            # 8. Multi-Timeframe Confirmation
+            mtf_ok = await self.get_higher_timeframe_confirmation(symbol, timeframe, signal_direction)
+            if mtf_ok:
+                confirmations += 1
+                confirmation_details['mtf'] = True
+            
+            # Require minimum confirmations
+            if confirmations < self.min_confirmations:
+                logger.debug(f"❌ {symbol} - Only {confirmations}/{self.min_confirmations} confirmations")
                 return None
             
-            # Trend alignment - more lenient
-            trend_aligned = self.check_trend_alignment(df, structure['signal'])
-            if not trend_aligned:
-                logger.debug(f"❌ {symbol} - Trend not aligned")
-                return None
-            
-            # Momentum check - more lenient
-            momentum_ok = self.check_momentum(df, structure['signal'])
-            if not momentum_ok:
-                logger.debug(f"❌ {symbol} - Momentum not favorable")
-                return None
-            
-            # Order block
-            order_block = self.detect_order_blocks(df, structure['signal'])
+            # Order block detection
+            order_block = self.detect_order_blocks(df, signal_direction)
             if not order_block:
-                logger.debug(f"❌ {symbol} - No order block found")
+                logger.debug(f"❌ {symbol} - No strong order block")
                 return None
             
+            # FVG and Premium/Discount zones
             fvgs = self.detect_fvg(df)
             pd_zone = self.calculate_premium_discount(df, swing_highs, swing_lows)
             
+            # Zone validation
+            if pd_zone:
+                if signal_direction == 'LONG' and pd_zone['zone'] not in ['DISCOUNT']:
+                    logger.debug(f"❌ {symbol} - Not in discount zone for LONG")
+                    return None
+                elif signal_direction == 'SHORT' and pd_zone['zone'] not in ['PREMIUM']:
+                    logger.debug(f"❌ {symbol} - Not in premium zone for SHORT")
+                    return None
+            
+            # Calculate entry, stop loss, and targets
             current_price = df['close'].iloc[-1]
             atr = self.calculate_atr(df)
             rsi = self.calculate_rsi(df)
+            adx = self.calculate_adx(df)
             
             ema_20 = self.calculate_ema(df, 20)
             ema_50 = self.calculate_ema(df, 50)
@@ -520,37 +792,34 @@ class SmartMoneyAnalyzer:
             
             valid_signal = False
             
-            if structure['signal'] == 'LONG':
-                # More lenient zone requirement
-                if pd_zone and pd_zone['zone'] in ['DISCOUNT', 'EQUILIBRIUM']:
-                    valid_signal = True
-                    entry_price = current_price
-                    # Tighter stop loss for lower risk (0.3 instead of 0.5)
-                    stop_loss = order_block['low'] - (atr * 0.3)
-                    risk = entry_price - stop_loss
-                    
-                    # Optimized targets
-                    target1 = entry_price + (risk * 2.0)
-                    target2 = entry_price + (risk * 3.5)
-                    target3 = entry_price + (risk * 5.0)
+            if signal_direction == 'LONG':
+                entry_price = current_price
+                # WIDER STOP LOSS: 1.5-2 ATR below order block
+                stop_loss = order_block['low'] - (atr * 1.8)
+                risk = entry_price - stop_loss
+                
+                # Dynamic targets based on risk
+                target1 = entry_price + (risk * 2.5)
+                target2 = entry_price + (risk * 4.0)
+                target3 = entry_price + (risk * 6.0)
+                valid_signal = True
             
-            elif structure['signal'] == 'SHORT':
-                # More lenient zone requirement
-                if pd_zone and pd_zone['zone'] in ['PREMIUM', 'EQUILIBRIUM']:
-                    valid_signal = True
-                    entry_price = current_price
-                    # Tighter stop loss for lower risk (0.3 instead of 0.5)
-                    stop_loss = order_block['high'] + (atr * 0.3)
-                    risk = stop_loss - entry_price
-                    
-                    # Optimized targets
-                    target1 = entry_price - (risk * 2.0)
-                    target2 = entry_price - (risk * 3.5)
-                    target3 = entry_price - (risk * 5.0)
+            elif signal_direction == 'SHORT':
+                entry_price = current_price
+                # WIDER STOP LOSS: 1.5-2 ATR above order block
+                stop_loss = order_block['high'] + (atr * 1.8)
+                risk = stop_loss - entry_price
+                
+                # Dynamic targets based on risk
+                target1 = entry_price - (risk * 2.5)
+                target2 = entry_price - (risk * 4.0)
+                target3 = entry_price - (risk * 6.0)
+                valid_signal = True
             
             if not valid_signal:
                 return None
             
+            # Calculate R/R ratio
             rr_ratio = abs(target1 - entry_price) / risk
             if rr_ratio < self.min_rr_ratio:
                 logger.debug(f"❌ {symbol} - R/R too low: {rr_ratio:.2f}")
@@ -558,11 +827,11 @@ class SmartMoneyAnalyzer:
             
             # Conservative leverage based on risk
             risk_percent = (risk / entry_price) * 100
-            if risk_percent < 0.8:
+            if risk_percent < 1.0:
                 leverage = 10
-            elif risk_percent < 1.2:
+            elif risk_percent < 1.5:
                 leverage = 8
-            elif risk_percent < 2.0:
+            elif risk_percent < 2.5:
                 leverage = 5
             else:
                 leverage = 3
@@ -572,7 +841,7 @@ class SmartMoneyAnalyzer:
                 'symbol_name': SYMBOLS[symbol]['name'],
                 'ticker': SYMBOLS[symbol]['ticker'],
                 'timeframe': timeframe,
-                'direction': structure['signal'],
+                'direction': signal_direction,
                 'entry_price': round(entry_price, 8),
                 'stop_loss': round(stop_loss, 8),
                 'targets': [
@@ -593,10 +862,15 @@ class SmartMoneyAnalyzer:
                 'ema_200': ema_200,
                 'atr': atr,
                 'rsi': rsi,
+                'adx': adx,
                 'rr_ratio': rr_ratio,
                 'risk_percent': risk_percent,
+                'confirmations': confirmations,
+                'confirmation_details': confirmation_details,
                 'timestamp': datetime.now(timezone.utc)
             }
+            
+            logger.info(f"✅ HIGH QUALITY SIGNAL: {symbol} {timeframe} {signal_direction} - {confirmations} confirmations")
             
             return signal
             
@@ -767,10 +1041,12 @@ class ChartGenerator:
                 spine.set_color('#333333')
                 spine.set_linewidth(2.5)
             
-            # Title
+            # Title with confirmations
             direction_emoji = "🟢 LONG" if signal['direction'] == 'LONG' else "🔴 SHORT"
             title = f"{direction_emoji} | {signal['symbol_name']} ({signal['ticker']}/USDT) | {signal['timeframe'].upper()}"
-            subtitle = f"Smart Money Concept | R/R: 1:{signal.get('rr_ratio', 0):.1f} | RSI: {signal.get('rsi', 0):.1f} | Risk: {signal.get('risk_percent', 0):.2f}%"
+            
+            confirmations = signal.get('confirmations', 0)
+            subtitle = f"✅ {confirmations} Confirmations | R/R: 1:{signal.get('rr_ratio', 0):.1f} | RSI: {signal.get('rsi', 0):.1f} | ADX: {signal.get('adx', 0):.1f} | Risk: {signal.get('risk_percent', 0):.2f}%"
             
             ax.set_title(title, color='#000000', fontsize=24, fontweight='bold', pad=20)
             ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, 
@@ -801,11 +1077,11 @@ class ChartGenerator:
 
 
 class TelegramSignalBot:
-    """Telegram signal bot with real-time monitoring"""
+    """Telegram signal bot with advanced strategy"""
     
     def __init__(self):
         self.bot = Bot(token=BOT_TOKEN)
-        self.analyzer = SmartMoneyAnalyzer()
+        self.analyzer = AdvancedSmartMoneyAnalyzer()
         self.chart_gen = ChartGenerator()
         self.active_trades = {}
         
@@ -945,13 +1221,17 @@ class TelegramSignalBot:
             rr_ratio = signal.get('rr_ratio', 2.5)
             potential_profit = abs(signal['targets'][0] - signal['entry_price']) / signal['entry_price'] * 100
             risk_percent = signal.get('risk_percent', 1.0)
+            confirmations = signal.get('confirmations', 0)
             
             # Format prices
             entry_str = ChartGenerator.format_price(signal['entry_price'])
             sl_str = ChartGenerator.format_price(signal['stop_loss'])
             tp_strs = [ChartGenerator.format_price(t) for t in signal['targets']]
             
-            message = f"{direction_emoji} *{signal['direction']}* | {signal['symbol_name']} | {signal['timeframe'].upper()}\n\n"
+            message = f"🔥 *HIGH QUALITY SIGNAL* 🔥\n"
+            message += f"{direction_emoji} *{signal['direction']}* | {signal['symbol_name']} | {signal['timeframe'].upper()}\n\n"
+            
+            message += f"✅ *{confirmations} Confirmations Passed*\n\n"
             
             message += f"📍 *Entry:* `{entry_str}`\n\n"
             
@@ -965,6 +1245,7 @@ class TelegramSignalBot:
             message += f"📊 Leverage: `{signal['leverage']}x`\n"
             message += f"📉 Risk: `{risk_percent:.2f}%`\n"
             message += f"📈 RSI: `{signal.get('rsi', 0):.1f}`\n"
+            message += f"💪 ADX: `{signal.get('adx', 0):.1f}`\n"
             message += f"💹 Potential: `+{potential_profit:.1f}%`\n\n"
             message += f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
             
@@ -977,7 +1258,7 @@ class TelegramSignalBot:
             
             await self.save_signal(signal, sent_message.message_id)
             
-            logger.info(f"✅ Signal sent: {signal['symbol_name']} {signal['direction']}")
+            logger.info(f"✅ Signal sent: {signal['symbol_name']} {signal['direction']} - {confirmations} confirmations")
             
         except TelegramError as e:
             logger.error(f"❌ Telegram error: {e}")
@@ -986,7 +1267,7 @@ class TelegramSignalBot:
     
     async def scan_markets(self):
         """Scan markets for signals"""
-        logger.info("🔍 Scanning markets...")
+        logger.info("🔍 Scanning markets with ADVANCED STRATEGY...")
         
         signals_found = 0
         
@@ -1001,23 +1282,23 @@ class TelegramSignalBot:
                     signal = await self.analyzer.generate_signal(symbol, timeframe)
                     
                     if signal:
-                        logger.info(f"✅ SIGNAL: {symbol} {timeframe} {signal['direction']}")
+                        logger.info(f"✅ HIGH QUALITY SIGNAL: {symbol} {timeframe} {signal['direction']} - {signal['confirmations']} confirmations")
                         await self.send_signal(signal)
                         signals_found += 1
-                        break
+                        break  # Move to next symbol
                     
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                     
                 except Exception as e:
                     logger.error(f"❌ Error scanning {symbol} {timeframe}: {e}")
                     continue
         
-        logger.info(f"✅ Scan complete. Signals found: {signals_found}")
+        logger.info(f"✅ Scan complete. High-quality signals found: {signals_found}")
     
     async def run(self):
         """Run the bot"""
         logger.info("=" * 70)
-        logger.info("🤖 Crypto Signal Bot - Smart Money Concept")
+        logger.info("🤖 Advanced Crypto Signal Bot - Multi-Filter Strategy")
         logger.info("=" * 70)
         
         try:
@@ -1026,13 +1307,14 @@ class TelegramSignalBot:
             logger.info(f"📢 Channel: {CHANNEL_ID}")
             logger.info(f"📊 Symbols: {', '.join([s['ticker'] for s in SYMBOLS.values()])}")
             logger.info(f"⏱️  Timeframes: {', '.join(TIMEFRAMES.keys())}")
-            logger.info(f"🔄 Scan interval: 3 minutes")
+            logger.info(f"🔄 Scan interval: 2 minutes")
+            logger.info(f"🎯 Strategy: Multi-filter with wider stops")
         except Exception as e:
             logger.error(f"❌ Connection failed: {e}")
             return
         
         logger.info("=" * 70)
-        logger.info("🚀 Bot is running...")
+        logger.info("🚀 Bot is running with ADVANCED STRATEGY...")
         logger.info("=" * 70)
         
         while True:
@@ -1040,8 +1322,8 @@ class TelegramSignalBot:
                 await self.scan_markets()
                 await self.monitor_active_trades()
                 
-                logger.info(f"⏸️  Waiting 3 minutes... Active trades: {len(self.active_trades)}")
-                await asyncio.sleep(180)  # 3 minutes
+                logger.info(f"⏸️  Waiting 2 minutes... Active trades: {len(self.active_trades)}")
+                await asyncio.sleep(120)  # 2 minutes - faster scanning
                 
             except KeyboardInterrupt:
                 logger.info("🛑 Stopping bot...")
