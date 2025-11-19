@@ -880,27 +880,33 @@ class AdvancedSmartMoneyAnalyzer:
 
 
 class ChartGenerator:
-    """Professional chart generator with white background"""
+    """Professional chart generator with white background and volume analysis"""
     
     @staticmethod
     def format_price(price: float) -> str:
-        """Format price with comma separator"""
+        """Format price with comma separator - NO decimals"""
         if price < 1:
-            return f"${price:.6f}"
-        elif price < 100:
-            return f"${price:,.2f}"
+            return f"${price:.4f}"
+        elif price < 10:
+            return f"${price:.2f}"
         else:
             return f"${price:,.0f}"
     
     @staticmethod
     def create_chart(signal: Dict) -> io.BytesIO:
-        """Create candlestick chart with SMC analysis - White background"""
+        """Create candlestick chart with SMC analysis + Volume - White background"""
         try:
             df = signal['df'].tail(120).copy()
             
-            fig, ax = plt.subplots(figsize=(20, 12))
+            # Create subplots: price chart (75%) + volume chart (25%)
+            fig, (ax, ax_vol) = plt.subplots(2, 1, figsize=(20, 16), 
+                                             gridspec_kw={'height_ratios': [3, 1]},
+                                             sharex=True)
             fig.patch.set_facecolor('#FFFFFF')
             ax.set_facecolor('#FFFFFF')
+            ax_vol.set_facecolor('#FFFFFF')
+            
+            # ==================== PRICE CHART ====================
             
             # Plot EMAs
             if 'ema_20' in signal and 'ema_50' in signal:
@@ -915,7 +921,7 @@ class ChartGenerator:
                 ax.plot(range(len(ema_20_values)), ema_20_values, 
                        color='#0080FF', linewidth=3, label='EMA 20', alpha=0.9, zorder=2)
             
-            # Plot candles
+            # Plot candles with REDUCED SPACING (width increased from 0.7 to 0.85)
             for idx in range(len(df)):
                 row = df.iloc[idx]
                 
@@ -930,7 +936,8 @@ class ChartGenerator:
                     height = 0.0001
                 bottom = min(row['open'], row['close'])
                 
-                ax.add_patch(Rectangle((idx - 0.35, bottom), 0.7, height, 
+                # INCREASED WIDTH: from 0.35 to 0.425 (total width 0.85 instead of 0.7)
+                ax.add_patch(Rectangle((idx - 0.425, bottom), 0.85, height, 
                                        facecolor=candle_color, edgecolor=candle_color, 
                                        alpha=0.9, linewidth=0, zorder=3))
                 
@@ -960,14 +967,14 @@ class ChartGenerator:
                        bbox=dict(boxstyle='round,pad=0.7', facecolor=ob_color, 
                                 edgecolor='black', linewidth=2.5, alpha=1.0), zorder=5)
             
-            # Fair Value Gaps
+            # Fair Value Gaps (3 max)
             for fvg in signal.get('fvgs', []):
                 fvg_color = '#0080FF' if 'BULLISH' in fvg['type'] else '#FFA500'
                 ax.axhspan(fvg['bottom'], fvg['top'], alpha=0.2, 
                           color=fvg_color, zorder=1, linestyle=':', 
                           edgecolor=fvg_color, linewidth=2)
             
-            # Swing Points
+            # Swing Points (10 highs, 10 lows)
             for sh in signal.get('swing_highs', [])[-10:]:
                 if sh['index'] < len(df):
                     ax.plot(sh['index'], sh['price'], 'v', 
@@ -980,7 +987,7 @@ class ChartGenerator:
                            color='#00C853', markersize=14, markeredgecolor='black',
                            markeredgewidth=2.5, zorder=5)
             
-            # Current Price - Big marker
+            # Current Price Marker - Big and Clear
             current_idx = len(df) - 1
             current_price = df['close'].iloc[-1]
             ax.plot(current_idx, current_price, 'o', color='#FFD700', markersize=20, 
@@ -1046,13 +1053,12 @@ class ChartGenerator:
             title = f"{direction_emoji} | {signal['symbol_name']} ({signal['ticker']}/USDT) | {signal['timeframe'].upper()}"
             
             confirmations = signal.get('confirmations', 0)
-            subtitle = f"✅ {confirmations} Confirmations | R/R: 1:{signal.get('rr_ratio', 0):.1f} | RSI: {signal.get('rsi', 0):.1f} | ADX: {signal.get('adx', 0):.1f} | Risk: {signal.get('risk_percent', 0):.2f}%"
+            subtitle = f"✅ {confirmations} Confirmations | R:R 1:{signal.get('rr_ratio', 0):.1f} | RSI: {signal.get('rsi', 0):.0f} | ADX: {signal.get('adx', 0):.0f} | Risk: {signal.get('risk_percent', 0):.1f}%"
             
             ax.set_title(title, color='#000000', fontsize=24, fontweight='bold', pad=20)
             ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, 
                    fontsize=14, ha='center', color='#333333', fontweight='bold')
             
-            ax.set_xlabel('Time Period', color='#333333', fontsize=15, fontweight='bold')
             ax.set_ylabel('Price (USDT)', color='#333333', fontsize=15, fontweight='bold')
             
             # Legend
@@ -1060,6 +1066,59 @@ class ChartGenerator:
                               facecolor='#FFFFFF', edgecolor='#333333', 
                               labelcolor='#000000', ncol=2)
             legend.get_frame().set_linewidth(2.5)
+            
+            # ==================== VOLUME CHART ====================
+            
+            # Calculate volume MA
+            volume_ma = df['volume'].rolling(window=20).mean()
+            
+            # Plot volume bars with colors matching candle direction
+            for idx in range(len(df)):
+                row = df.iloc[idx]
+                
+                if pd.isna(row['open']) or pd.isna(row['close']):
+                    continue
+                
+                is_bullish = row['close'] >= row['open']
+                vol_color = '#00C853' if is_bullish else '#FF1744'
+                
+                # Match candle width for consistency
+                ax_vol.add_patch(Rectangle((idx - 0.425, 0), 0.85, row['volume'], 
+                                           facecolor=vol_color, edgecolor=vol_color, 
+                                           alpha=0.7, linewidth=0, zorder=2))
+            
+            # Plot volume MA
+            ax_vol.plot(range(len(volume_ma)), volume_ma.values, 
+                       color='#0080FF', linewidth=2.5, label='Volume MA (20)', 
+                       alpha=0.9, zorder=3)
+            
+            # Highlight high volume areas (above 1.5x MA)
+            high_vol_threshold = volume_ma * 1.5
+            for idx in range(len(df)):
+                if df['volume'].iloc[idx] > high_vol_threshold.iloc[idx]:
+                    ax_vol.plot(idx, df['volume'].iloc[idx], 'o', 
+                               color='#FFD700', markersize=8, 
+                               markeredgecolor='black', markeredgewidth=1.5, zorder=4)
+            
+            # Volume chart styling
+            ax_vol.set_ylabel('Volume', color='#333333', fontsize=14, fontweight='bold')
+            ax_vol.set_xlabel('Time Period', color='#333333', fontsize=15, fontweight='bold')
+            ax_vol.grid(True, alpha=0.25, color='#CCCCCC', linestyle='-', linewidth=1)
+            ax_vol.set_axisbelow(True)
+            ax_vol.tick_params(colors='#333333', labelsize=11)
+            
+            for spine in ax_vol.spines.values():
+                spine.set_color('#333333')
+                spine.set_linewidth(2.5)
+            
+            # Volume legend
+            vol_legend = ax_vol.legend(loc='upper left', fontsize=10, framealpha=0.95, 
+                                      facecolor='#FFFFFF', edgecolor='#333333', 
+                                      labelcolor='#000000')
+            vol_legend.get_frame().set_linewidth(2.5)
+            
+            # Format volume axis
+            ax_vol.ticklabel_format(style='plain', axis='y')
             
             plt.tight_layout()
             
@@ -1177,7 +1236,7 @@ class TelegramSignalBot:
                 message += f"*{symbol_name}* {trade['direction']}\n"
                 message += f"Entry: `{ChartGenerator.format_price(trade['entry_price'])}`\n"
                 message += f"Exit: `{ChartGenerator.format_price(current_price)}`\n"
-                message += f"Loss: *-{loss_percent:.2f}%*"
+                message += f"Loss: *-{loss_percent:.1f}%*"
             
             elif 'TARGET' in update_type:
                 target_num = int(update_type.split('_')[1])
@@ -1186,12 +1245,12 @@ class TelegramSignalBot:
                 profit_percent = abs((current_price - trade['entry_price']) / trade['entry_price'] * 100)
                 leverage_profit = profit_percent * trade.get('leverage', 1)
                 
-                message = f"{emoji} *TARGET {target_num} HIT!*\n\n"
+                message = f"{emoji} *TARGET {target_num} REACHED!*\n\n"
                 message += f"*{symbol_name}* {trade['direction']}\n"
                 message += f"Entry: `{ChartGenerator.format_price(trade['entry_price'])}`\n"
-                message += f"Target: `{ChartGenerator.format_price(current_price)}`\n"
-                message += f"Profit: *+{profit_percent:.2f}%*\n"
-                message += f"With {trade.get('leverage', 1)}x: *+{leverage_profit:.2f}%*"
+                message += f"Exit: `{ChartGenerator.format_price(current_price)}`\n"
+                message += f"Profit: *+{profit_percent:.1f}%*\n"
+                message += f"With {trade.get('leverage', 1)}x Leverage: *+{leverage_profit:.1f}%*"
                 
                 if target_num == len(trade['targets']):
                     message += f"\n\n🎉 *ALL TARGETS COMPLETED!*"
@@ -1228,26 +1287,23 @@ class TelegramSignalBot:
             sl_str = ChartGenerator.format_price(signal['stop_loss'])
             tp_strs = [ChartGenerator.format_price(t) for t in signal['targets']]
             
-            message = f"🔥 *HIGH QUALITY SIGNAL* 🔥\n"
-            message += f"{direction_emoji} *{signal['direction']}* | {signal['symbol_name']} | {signal['timeframe'].upper()}\n\n"
+            message = f"🔥 *PREMIUM SIGNAL* 🔥\n"
+            message += f"{direction_emoji} *{signal['direction']}* | {signal['symbol_name']} ({signal['ticker']}) | {signal['timeframe'].upper()}\n\n"
             
-            message += f"✅ *{confirmations} Confirmations Passed*\n\n"
+            message += f"✅ *{confirmations} Confirmations*\n\n"
             
-            message += f"📍 *Entry:* `{entry_str}`\n\n"
+            message += f"💰 *Entry:* `{entry_str}`\n\n"
             
-            message += f"🎯 *Targets:*\n"
+            message += f"🎯 *Take Profit:*\n"
             for i, tp_str in enumerate(tp_strs, 1):
-                message += f"TP{i}: `{tp_str}`\n"
+                message += f"   TP{i}: `{tp_str}`\n"
             
             message += f"\n🛑 *Stop Loss:* `{sl_str}`\n\n"
             
-            message += f"⚖️ Risk/Reward: `1:{rr_ratio:.1f}`\n"
-            message += f"📊 Leverage: `{signal['leverage']}x`\n"
-            message += f"📉 Risk: `{risk_percent:.2f}%`\n"
-            message += f"📈 RSI: `{signal.get('rsi', 0):.1f}`\n"
-            message += f"💪 ADX: `{signal.get('adx', 0):.1f}`\n"
-            message += f"💹 Potential: `+{potential_profit:.1f}%`\n\n"
-            message += f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            message += f"⚖️ R:R `1:{rr_ratio:.1f}` | 📊 Leverage: `{signal['leverage']}x`\n"
+            message += f"📉 Risk: `{risk_percent:.2f}%` | 📈 RSI: `{signal.get('rsi', 0):.0f}`\n"
+            message += f"💪 ADX: `{signal.get('adx', 0):.0f}` | 💹 Profit: `+{potential_profit:.1f}%`\n\n"
+            message += f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC"
             
             sent_message = await self.bot.send_photo(
                 chat_id=CHANNEL_ID,
@@ -1308,13 +1364,13 @@ class TelegramSignalBot:
             logger.info(f"📊 Symbols: {', '.join([s['ticker'] for s in SYMBOLS.values()])}")
             logger.info(f"⏱️  Timeframes: {', '.join(TIMEFRAMES.keys())}")
             logger.info(f"🔄 Scan interval: 2 minutes")
-            logger.info(f"🎯 Strategy: Multi-filter with wider stops")
+            logger.info(f"🎯 Strategy: Multi-filter with wider stops + Volume Analysis")
         except Exception as e:
             logger.error(f"❌ Connection failed: {e}")
             return
         
         logger.info("=" * 70)
-        logger.info("🚀 Bot is running with ADVANCED STRATEGY...")
+        logger.info("🚀 Bot is running with ADVANCED STRATEGY + VOLUME ANALYSIS...")
         logger.info("=" * 70)
         
         while True:
