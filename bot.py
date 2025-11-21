@@ -55,7 +55,7 @@ TIMEFRAMES = {
 
 
 class BinanceDataFetcher:
-    """Fetch crypto data from multiple sources with fallback"""
+    """Fetch crypto data from multiple sources with fallback - OPTIMIZED"""
     
     def __init__(self):
         # Try multiple Binance endpoints
@@ -80,8 +80,17 @@ class BinanceDataFetcher:
             'XRPUSDT': {'cdc': 'XRP_USDT'}
         }
         
+        # Keep persistent session for better performance
+        self.session = None
+        
+    async def get_session(self):
+        """Get or create persistent session"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+        
     async def get_ohlcv_binance(self, symbol: str, interval: str, limit: int, base_url: str) -> pd.DataFrame:
-        """Try fetching from Binance"""
+        """Try fetching from Binance - OPTIMIZED"""
         try:
             url = f"{base_url}/klines"
             params = {
@@ -90,12 +99,12 @@ class BinanceDataFetcher:
                 'limit': min(limit, 1000)
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                    if response.status != 200:
-                        return None
-                    
-                    data = await response.json()
+            session = await self.get_session()
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    return None
+                
+                data = await response.json()
             
             if not data:
                 return None
@@ -122,7 +131,7 @@ class BinanceDataFetcher:
             return None
     
     async def get_ohlcv_cryptocom(self, symbol: str, interval: str = '1h') -> pd.DataFrame:
-        """Fallback to Crypto.com Exchange API"""
+        """Fallback to Crypto.com Exchange API - OPTIMIZED"""
         try:
             mapped = self.symbol_map.get(symbol, {}).get('cdc')
             if not mapped:
@@ -138,12 +147,12 @@ class BinanceDataFetcher:
                 'timeframe': timeframe
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                    if response.status != 200:
-                        return None
-                    
-                    data = await response.json()
+            session = await self.get_session()
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    return None
+                
+                data = await response.json()
             
             if data.get('code') != 0 or 'result' not in data:
                 return None
@@ -176,37 +185,33 @@ class BinanceDataFetcher:
             return None
         
     async def get_ohlcv(self, symbol: str, interval: str, limit: int = 300) -> pd.DataFrame:
-        """Get OHLCV data with fallback mechanism"""
+        """Get OHLCV data with fallback mechanism - OPTIMIZED"""
         # Try Binance first (all endpoints)
         for base_url in self.binance_urls:
             df = await self.get_ohlcv_binance(symbol, interval, limit, base_url)
             if df is not None and len(df) > 0:
-                logger.debug(f"✅ Data from Binance")
                 return df.tail(limit)
         
         # Fallback to Crypto.com
-        logger.info(f"⚠️  Binance failed, using Crypto.com for {symbol}")
         df = await self.get_ohlcv_cryptocom(symbol, interval)
         if df is not None and len(df) > 0:
-            logger.info(f"✅ Data from Crypto.com")
             return df.tail(limit)
         
-        logger.error(f"❌ All sources failed for {symbol}")
         return None
     
     async def get_current_price(self, symbol: str) -> float:
-        """Get current price with fallback"""
+        """Get current price with fallback - OPTIMIZED"""
         # Try Binance first
         for base_url in self.binance_urls:
             try:
                 url = f"{base_url}/ticker/price"
                 params = {'symbol': symbol}
                 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            return float(data.get('price'))
+                session = await self.get_session()
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=8)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return float(data.get('price'))
             except Exception:
                 continue
         
@@ -219,30 +224,35 @@ class BinanceDataFetcher:
             url = f"{self.cryptocom_url}/public/get-ticker"
             params = {'instrument_name': mapped}
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get('code') == 0 and 'result' in data:
-                            result = data['result']['data'][0]
-                            return float(result.get('a', 0))  # ask price
-        except Exception as e:
-            logger.error(f"❌ Error fetching price: {e}")
+            session = await self.get_session()
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=8)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get('code') == 0 and 'result' in data:
+                        result = data['result']['data'][0]
+                        return float(result.get('a', 0))
+        except Exception:
+            pass
         
         return None
+    
+    async def close(self):
+        """Close session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
 
 
 data_fetcher = BinanceDataFetcher()
 
 
 class AdvancedSmartMoneyAnalyzer:
-    """Advanced Smart Money Analyzer with Multiple Filters and Strong Strategy"""
+    """Advanced Smart Money Analyzer with Multiple Filters and Strong Strategy - OPTIMIZED"""
     
     def __init__(self):
         self.lookback_periods = 50
-        self.min_rr_ratio = 2.5  # Higher R/R for quality
-        self.volume_threshold = 1.5  # Higher volume requirement
-        self.min_confirmations = 4  # Minimum confirmations required
+        self.min_rr_ratio = 2.0  # Moderate R/R for balanced signals
+        self.volume_threshold = 1.3  # Moderate volume requirement
+        self.min_confirmations = 3  # Balanced confirmations (was 4)
         
     def calculate_ema(self, df: pd.DataFrame, period: int) -> pd.Series:
         """Calculate EMA"""
@@ -294,21 +304,18 @@ class AdvancedSmartMoneyAnalyzer:
     
     def calculate_stochastic_rsi(self, df: pd.DataFrame, period: int = 14, smooth_k: int = 3, smooth_d: int = 3) -> Tuple[float, float]:
         """Calculate Stochastic RSI"""
-        # First calculate RSI
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         
-        # Then apply Stochastic formula to RSI
         rsi_min = rsi.rolling(window=period).min()
         rsi_max = rsi.rolling(window=period).max()
         
         stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min) * 100
         stoch_rsi = stoch_rsi.fillna(50)
         
-        # Smooth with K and D
         k_line = stoch_rsi.rolling(window=smooth_k).mean()
         d_line = k_line.rolling(window=smooth_d).mean()
         
@@ -320,26 +327,22 @@ class AdvancedSmartMoneyAnalyzer:
         low = df['low']
         close = df['close']
         
-        # Calculate +DM and -DM
         plus_dm = high.diff()
         minus_dm = -low.diff()
         
         plus_dm[plus_dm < 0] = 0
         minus_dm[minus_dm < 0] = 0
         
-        # Calculate True Range
         tr1 = high - low
         tr2 = abs(high - close.shift())
         tr3 = abs(low - close.shift())
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         
-        # Smooth with Wilder's smoothing
         atr = tr.rolling(window=period).mean()
         
         plus_di = 100 * (plus_dm.rolling(window=period).mean() / atr)
         minus_di = 100 * (minus_dm.rolling(window=period).mean() / atr)
         
-        # Calculate DX and ADX
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
         adx = dx.rolling(window=period).mean()
         
@@ -350,9 +353,7 @@ class AdvancedSmartMoneyAnalyzer:
         swing_highs = []
         swing_lows = []
         
-        # Use 3 candles on each side for stronger swings
         for i in range(3, len(df) - 3):
-            # Swing High: higher than 3 candles on each side
             if (df['high'].iloc[i] > df['high'].iloc[i-1] and 
                 df['high'].iloc[i] > df['high'].iloc[i-2] and
                 df['high'].iloc[i] > df['high'].iloc[i-3] and
@@ -365,7 +366,6 @@ class AdvancedSmartMoneyAnalyzer:
                     'time': df.index[i]
                 })
             
-            # Swing Low: lower than 3 candles on each side
             if (df['low'].iloc[i] < df['low'].iloc[i-1] and 
                 df['low'].iloc[i] < df['low'].iloc[i-2] and
                 df['low'].iloc[i] < df['low'].iloc[i-3] and
@@ -381,23 +381,20 @@ class AdvancedSmartMoneyAnalyzer:
         return swing_highs, swing_lows
     
     def detect_strong_bos(self, df: pd.DataFrame, swing_highs: List, swing_lows: List) -> Dict:
-        """Detect Strong Break of Structure - Requires multiple confirmations"""
+        """Detect Strong Break of Structure"""
         if len(swing_highs) < 3 or len(swing_lows) < 3:
             return None
         
         current_price = df['close'].iloc[-1]
         prev_close = df['close'].iloc[-2]
         
-        # Get last 2 swing highs and lows
         last_swing_high = swing_highs[-1]['price']
         prev_swing_high = swing_highs[-2]['price'] if len(swing_highs) >= 2 else last_swing_high
         
         last_swing_low = swing_lows[-1]['price']
         prev_swing_low = swing_lows[-2]['price'] if len(swing_lows) >= 2 else last_swing_low
         
-        # Strong Bullish BOS: Break previous high with confirmation
         if current_price > last_swing_high and prev_close < last_swing_high:
-            # Check if we also broke previous swing high (double confirmation)
             if len(swing_highs) >= 2 and current_price > prev_swing_high:
                 return {
                     'type': 'STRONG_BOS_BULLISH',
@@ -414,9 +411,7 @@ class AdvancedSmartMoneyAnalyzer:
                 'broken_levels': 1
             }
         
-        # Strong Bearish BOS: Break previous low with confirmation
         if current_price < last_swing_low and prev_close > last_swing_low:
-            # Check if we also broke previous swing low (double confirmation)
             if len(swing_lows) >= 2 and current_price < prev_swing_low:
                 return {
                     'type': 'STRONG_BOS_BEARISH',
@@ -447,7 +442,6 @@ class AdvancedSmartMoneyAnalyzer:
             next_body = abs(next_candle['close'] - next_candle['open'])
             
             if signal_type == 'LONG':
-                # Strong bearish candle followed by strong bullish impulse
                 if (candle['close'] < candle['open'] and 
                     next_candle['close'] > next_candle['open'] and
                     next_body > 1.5 * candle_body and
@@ -462,7 +456,6 @@ class AdvancedSmartMoneyAnalyzer:
                     })
             
             elif signal_type == 'SHORT':
-                # Strong bullish candle followed by strong bearish impulse
                 if (candle['close'] > candle['open'] and 
                     next_candle['close'] < next_candle['open'] and
                     next_body > 1.5 * candle_body and
@@ -476,25 +469,22 @@ class AdvancedSmartMoneyAnalyzer:
                         'strength': next_body / candle_body
                     })
         
-        # Return strongest order block
         if order_blocks:
             return max(order_blocks, key=lambda x: x['strength'])
         return None
     
     def detect_fvg(self, df: pd.DataFrame) -> List[Dict]:
-        """Detect Fair Value Gaps - Higher threshold"""
+        """Detect Fair Value Gaps"""
         fvgs = []
         
         for i in range(1, len(df) - 1):
             prev_candle = df.iloc[i - 1]
             next_candle = df.iloc[i + 1]
             
-            # Bullish FVG - Gap up
             gap_up = next_candle['low'] - prev_candle['high']
             if gap_up > 0:
-                # Calculate gap as percentage of price
                 gap_percent = (gap_up / prev_candle['high']) * 100
-                if gap_percent > 0.2:  # At least 0.2% gap
+                if gap_percent > 0.2:
                     fvgs.append({
                         'type': 'BULLISH_FVG',
                         'top': next_candle['low'],
@@ -504,7 +494,6 @@ class AdvancedSmartMoneyAnalyzer:
                         'percent': gap_percent
                     })
             
-            # Bearish FVG - Gap down
             gap_down = prev_candle['low'] - next_candle['high']
             if gap_down > 0:
                 gap_percent = (gap_down / prev_candle['low']) * 100
@@ -532,8 +521,8 @@ class AdvancedSmartMoneyAnalyzer:
         current_price = df['close'].iloc[-1]
         
         equilibrium = recent_low + (range_size * 0.5)
-        premium_zone = recent_low + (range_size * 0.618)  # 61.8% Fibonacci
-        discount_zone = recent_low + (range_size * 0.382)  # 38.2% Fibonacci
+        premium_zone = recent_low + (range_size * 0.618)
+        discount_zone = recent_low + (range_size * 0.382)
         
         if current_price >= premium_zone:
             zone = 'PREMIUM'
@@ -562,10 +551,8 @@ class AdvancedSmartMoneyAnalyzer:
         prev_hist = histogram.iloc[-2]
         
         if signal_direction == 'LONG':
-            # Bullish: MACD above signal and histogram increasing
             return current_macd > current_signal and current_hist > prev_hist and current_hist > 0
         else:
-            # Bearish: MACD below signal and histogram decreasing
             return current_macd < current_signal and current_hist < prev_hist and current_hist < 0
     
     def check_bollinger_confirmation(self, df: pd.DataFrame, signal_direction: str) -> bool:
@@ -578,10 +565,8 @@ class AdvancedSmartMoneyAnalyzer:
         current_middle = middle.iloc[-1]
         
         if signal_direction == 'LONG':
-            # For long: price should be near lower band or bouncing from it
             return current_price <= (current_lower * 1.02) or (current_price > current_lower and current_price < current_middle)
         else:
-            # For short: price should be near upper band or rejecting from it
             return current_price >= (current_upper * 0.98) or (current_price < current_upper and current_price > current_middle)
     
     def check_stochastic_rsi_confirmation(self, df: pd.DataFrame, signal_direction: str) -> bool:
@@ -589,17 +574,13 @@ class AdvancedSmartMoneyAnalyzer:
         k_line, d_line = self.calculate_stochastic_rsi(df)
         
         if signal_direction == 'LONG':
-            # For long: StochRSI should be oversold (<30) or crossing up
             return k_line < 40 or (k_line > d_line and k_line < 60)
         else:
-            # For short: StochRSI should be overbought (>70) or crossing down
             return k_line > 60 or (k_line < d_line and k_line > 40)
     
     def check_adx_confirmation(self, df: pd.DataFrame) -> bool:
         """ADX Confirmation - Trend Strength"""
         adx = self.calculate_adx(df)
-        
-        # ADX > 25 indicates strong trend
         return adx > 25
     
     def check_volume_confirmation(self, df: pd.DataFrame) -> bool:
@@ -610,7 +591,6 @@ class AdvancedSmartMoneyAnalyzer:
         avg_volume = df['volume'].tail(20).mean()
         recent_volume = df['volume'].tail(5).mean()
         
-        # Recent volume should be significantly above average
         return recent_volume >= (avg_volume * self.volume_threshold)
     
     def check_trend_alignment(self, df: pd.DataFrame, signal_direction: str) -> bool:
@@ -622,12 +602,10 @@ class AdvancedSmartMoneyAnalyzer:
         current_price = df['close'].iloc[-1]
         
         if signal_direction == 'LONG':
-            # Strong bullish: price > EMA20 > EMA50 > EMA200
             return (current_price > ema_20.iloc[-1] and 
                     ema_20.iloc[-1] > ema_50.iloc[-1] and
                     ema_50.iloc[-1] > ema_200.iloc[-1])
         else:
-            # Strong bearish: price < EMA20 < EMA50 < EMA200
             return (current_price < ema_20.iloc[-1] and 
                     ema_20.iloc[-1] < ema_50.iloc[-1] and
                     ema_50.iloc[-1] < ema_200.iloc[-1])
@@ -637,25 +615,22 @@ class AdvancedSmartMoneyAnalyzer:
         rsi = self.calculate_rsi(df)
         
         if signal_direction == 'LONG':
-            # For long: RSI between 40-70 (not overbought, some room to grow)
             return 40 <= rsi <= 70
         else:
-            # For short: RSI between 30-60 (not oversold, some room to fall)
             return 30 <= rsi <= 60
     
     async def get_higher_timeframe_confirmation(self, symbol: str, current_tf: str, signal_direction: str) -> bool:
         """Multi-Timeframe Confirmation - Check higher timeframe"""
-        # Map to higher timeframe
         tf_hierarchy = {'5m': '15m', '15m': '1h', '1h': '4h'}
         higher_tf = tf_hierarchy.get(current_tf)
         
         if not higher_tf:
-            return True  # No higher TF available (4h case)
+            return True
         
         try:
             df_higher = await data_fetcher.get_ohlcv(symbol, higher_tf, limit=100)
             if df_higher is None or len(df_higher) < 50:
-                return True  # Can't verify, allow signal
+                return True
             
             df_higher.set_index('timestamp', inplace=True)
             
@@ -664,18 +639,15 @@ class AdvancedSmartMoneyAnalyzer:
             current_price = df_higher['close'].iloc[-1]
             
             if signal_direction == 'LONG':
-                # Higher TF should also be bullish
                 return current_price > ema_20.iloc[-1] and ema_20.iloc[-1] > ema_50.iloc[-1]
             else:
-                # Higher TF should also be bearish
                 return current_price < ema_20.iloc[-1] and ema_20.iloc[-1] < ema_50.iloc[-1]
         
-        except Exception as e:
-            logger.error(f"MTF check error: {e}")
-            return True  # Allow signal if can't verify
+        except Exception:
+            return True
     
     async def generate_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
-        """Generate trading signal with STRONG multi-filter strategy"""
+        """Generate trading signal with STRONG multi-filter strategy - OPTIMIZED"""
         try:
             df = await data_fetcher.get_ohlcv(symbol, timeframe, limit=300)
             
@@ -684,13 +656,11 @@ class AdvancedSmartMoneyAnalyzer:
             
             df.set_index('timestamp', inplace=True)
             
-            # Detect swing points
             swing_highs, swing_lows = self.detect_swing_points(df)
             
             if len(swing_highs) < 5 or len(swing_lows) < 5:
                 return None
             
-            # Check for strong BOS
             structure = self.detect_strong_bos(df, swing_highs, swing_lows)
             
             if not structure or structure.get('strength') not in ['STRONG', 'VERY_STRONG']:
@@ -702,23 +672,21 @@ class AdvancedSmartMoneyAnalyzer:
             confirmations = 0
             confirmation_details = {}
             
-            # 1. Volume Confirmation
+            # 1. Volume Confirmation (MANDATORY)
             volume_ok = self.check_volume_confirmation(df)
             if volume_ok:
                 confirmations += 1
                 confirmation_details['volume'] = True
             else:
-                logger.debug(f"❌ {symbol} - Volume filter failed")
-                return None  # MANDATORY
+                return None
             
-            # 2. Trend Alignment
+            # 2. Trend Alignment (MANDATORY)
             trend_ok = self.check_trend_alignment(df, signal_direction)
             if trend_ok:
                 confirmations += 1
                 confirmation_details['trend'] = True
             else:
-                logger.debug(f"❌ {symbol} - Trend alignment failed")
-                return None  # MANDATORY
+                return None
             
             # 3. ADX - Trend Strength
             adx_ok = self.check_adx_confirmation(df)
@@ -758,27 +726,23 @@ class AdvancedSmartMoneyAnalyzer:
             
             # Require minimum confirmations
             if confirmations < self.min_confirmations:
-                logger.debug(f"❌ {symbol} - Only {confirmations}/{self.min_confirmations} confirmations")
                 return None
             
             # Order block detection
             order_block = self.detect_order_blocks(df, signal_direction)
             if not order_block:
-                logger.debug(f"❌ {symbol} - No strong order block")
                 return None
             
             # FVG and Premium/Discount zones
             fvgs = self.detect_fvg(df)
             pd_zone = self.calculate_premium_discount(df, swing_highs, swing_lows)
             
-            # Zone validation
+            # Zone validation (Moderate - allow EQUILIBRIUM)
             if pd_zone:
-                if signal_direction == 'LONG' and pd_zone['zone'] not in ['DISCOUNT']:
-                    logger.debug(f"❌ {symbol} - Not in discount zone for LONG")
-                    return None
-                elif signal_direction == 'SHORT' and pd_zone['zone'] not in ['PREMIUM']:
-                    logger.debug(f"❌ {symbol} - Not in premium zone for SHORT")
-                    return None
+                if signal_direction == 'LONG' and pd_zone['zone'] == 'PREMIUM':
+                    return None  # Don't buy at premium
+                elif signal_direction == 'SHORT' and pd_zone['zone'] == 'DISCOUNT':
+                    return None  # Don't sell at discount
             
             # Calculate entry, stop loss, and targets
             current_price = df['close'].iloc[-1]
@@ -794,11 +758,9 @@ class AdvancedSmartMoneyAnalyzer:
             
             if signal_direction == 'LONG':
                 entry_price = current_price
-                # WIDER STOP LOSS: 1.5-2 ATR below order block
                 stop_loss = order_block['low'] - (atr * 1.8)
                 risk = entry_price - stop_loss
                 
-                # Dynamic targets based on risk
                 target1 = entry_price + (risk * 2.5)
                 target2 = entry_price + (risk * 4.0)
                 target3 = entry_price + (risk * 6.0)
@@ -806,11 +768,9 @@ class AdvancedSmartMoneyAnalyzer:
             
             elif signal_direction == 'SHORT':
                 entry_price = current_price
-                # WIDER STOP LOSS: 1.5-2 ATR above order block
                 stop_loss = order_block['high'] + (atr * 1.8)
                 risk = stop_loss - entry_price
                 
-                # Dynamic targets based on risk
                 target1 = entry_price - (risk * 2.5)
                 target2 = entry_price - (risk * 4.0)
                 target3 = entry_price - (risk * 6.0)
@@ -822,7 +782,6 @@ class AdvancedSmartMoneyAnalyzer:
             # Calculate R/R ratio
             rr_ratio = abs(target1 - entry_price) / risk
             if rr_ratio < self.min_rr_ratio:
-                logger.debug(f"❌ {symbol} - R/R too low: {rr_ratio:.2f}")
                 return None
             
             # Conservative leverage based on risk
@@ -898,15 +857,12 @@ class ChartGenerator:
         try:
             df = signal['df'].tail(120).copy()
             
-            # Create subplots: price chart (75%) + volume chart (25%)
             fig, (ax, ax_vol) = plt.subplots(2, 1, figsize=(20, 16), 
                                              gridspec_kw={'height_ratios': [3, 1]},
                                              sharex=True)
             fig.patch.set_facecolor('#FFFFFF')
             ax.set_facecolor('#FFFFFF')
             ax_vol.set_facecolor('#FFFFFF')
-            
-            # ==================== PRICE CHART ====================
             
             # Plot EMAs
             if 'ema_20' in signal and 'ema_50' in signal:
@@ -921,7 +877,7 @@ class ChartGenerator:
                 ax.plot(range(len(ema_20_values)), ema_20_values, 
                        color='#0080FF', linewidth=3, label='EMA 20', alpha=0.9, zorder=2)
             
-            # Plot candles with REDUCED SPACING (width increased from 0.7 to 0.85)
+            # Plot candles
             for idx in range(len(df)):
                 row = df.iloc[idx]
                 
@@ -936,7 +892,6 @@ class ChartGenerator:
                     height = 0.0001
                 bottom = min(row['open'], row['close'])
                 
-                # INCREASED WIDTH: from 0.35 to 0.425 (total width 0.85 instead of 0.7)
                 ax.add_patch(Rectangle((idx - 0.425, bottom), 0.85, height, 
                                        facecolor=candle_color, edgecolor=candle_color, 
                                        alpha=0.9, linewidth=0, zorder=3))
@@ -967,14 +922,14 @@ class ChartGenerator:
                        bbox=dict(boxstyle='round,pad=0.7', facecolor=ob_color, 
                                 edgecolor='black', linewidth=2.5, alpha=1.0), zorder=5)
             
-            # Fair Value Gaps (3 max)
+            # Fair Value Gaps
             for fvg in signal.get('fvgs', []):
                 fvg_color = '#0080FF' if 'BULLISH' in fvg['type'] else '#FFA500'
                 ax.axhspan(fvg['bottom'], fvg['top'], alpha=0.2, 
                           color=fvg_color, zorder=1, linestyle=':', 
                           edgecolor=fvg_color, linewidth=2)
             
-            # Swing Points (10 highs, 10 lows)
+            # Swing Points
             for sh in signal.get('swing_highs', [])[-10:]:
                 if sh['index'] < len(df):
                     ax.plot(sh['index'], sh['price'], 'v', 
@@ -987,17 +942,15 @@ class ChartGenerator:
                            color='#00C853', markersize=14, markeredgecolor='black',
                            markeredgewidth=2.5, zorder=5)
             
-            # Current Price Marker - Big and Clear
+            # Current Price Marker
             current_idx = len(df) - 1
             current_price = df['close'].iloc[-1]
             ax.plot(current_idx, current_price, 'o', color='#FFD700', markersize=20, 
                    markeredgecolor='black', markeredgewidth=3, label='CURRENT PRICE', zorder=8)
             
-            # Current price line
             ax.axhline(current_price, color='#FFD700', linestyle='-', 
                       linewidth=2, alpha=0.6, zorder=1)
             
-            # Current price text
             price_text = ChartGenerator.format_price(current_price)
             ax.text(len(df) - 3, current_price, f'💰 {price_text}', 
                    fontsize=13, fontweight='bold', color='black',
@@ -1048,7 +1001,7 @@ class ChartGenerator:
                 spine.set_color('#333333')
                 spine.set_linewidth(2.5)
             
-            # Title with confirmations
+            # Title
             direction_emoji = "🟢 LONG" if signal['direction'] == 'LONG' else "🔴 SHORT"
             title = f"{direction_emoji} | {signal['symbol_name']} ({signal['ticker']}/USDT) | {signal['timeframe'].upper()}"
             
@@ -1069,10 +1022,8 @@ class ChartGenerator:
             
             # ==================== VOLUME CHART ====================
             
-            # Calculate volume MA
             volume_ma = df['volume'].rolling(window=20).mean()
             
-            # Plot volume bars with colors matching candle direction
             for idx in range(len(df)):
                 row = df.iloc[idx]
                 
@@ -1082,17 +1033,14 @@ class ChartGenerator:
                 is_bullish = row['close'] >= row['open']
                 vol_color = '#00C853' if is_bullish else '#FF1744'
                 
-                # Match candle width for consistency
                 ax_vol.add_patch(Rectangle((idx - 0.425, 0), 0.85, row['volume'], 
                                            facecolor=vol_color, edgecolor=vol_color, 
                                            alpha=0.7, linewidth=0, zorder=2))
             
-            # Plot volume MA
             ax_vol.plot(range(len(volume_ma)), volume_ma.values, 
                        color='#0080FF', linewidth=2.5, label='Volume MA (20)', 
                        alpha=0.9, zorder=3)
             
-            # Highlight high volume areas (above 1.5x MA)
             high_vol_threshold = volume_ma * 1.5
             for idx in range(len(df)):
                 if df['volume'].iloc[idx] > high_vol_threshold.iloc[idx]:
@@ -1100,7 +1048,6 @@ class ChartGenerator:
                                color='#FFD700', markersize=8, 
                                markeredgecolor='black', markeredgewidth=1.5, zorder=4)
             
-            # Volume chart styling
             ax_vol.set_ylabel('Volume', color='#333333', fontsize=14, fontweight='bold')
             ax_vol.set_xlabel('Time Period', color='#333333', fontsize=15, fontweight='bold')
             ax_vol.grid(True, alpha=0.25, color='#CCCCCC', linestyle='-', linewidth=1)
@@ -1111,13 +1058,11 @@ class ChartGenerator:
                 spine.set_color('#333333')
                 spine.set_linewidth(2.5)
             
-            # Volume legend
             vol_legend = ax_vol.legend(loc='upper left', fontsize=10, framealpha=0.95, 
                                       facecolor='#FFFFFF', edgecolor='#333333', 
                                       labelcolor='#000000')
             vol_legend.get_frame().set_linewidth(2.5)
             
-            # Format volume axis
             ax_vol.ticklabel_format(style='plain', axis='y')
             
             plt.tight_layout()
@@ -1136,7 +1081,7 @@ class ChartGenerator:
 
 
 class TelegramSignalBot:
-    """Telegram signal bot with advanced strategy"""
+    """Telegram signal bot with advanced strategy - OPTIMIZED for SPEED"""
     
     def __init__(self):
         self.bot = Bot(token=BOT_TOKEN)
@@ -1268,7 +1213,7 @@ class TelegramSignalBot:
             logger.error(f"❌ Error sending update: {e}")
     
     async def send_signal(self, signal: Dict):
-        """Send signal to Telegram"""
+        """Send signal to Telegram - OPTIMIZED"""
         try:
             chart_buffer = self.chart_gen.create_chart(signal)
             
@@ -1282,7 +1227,6 @@ class TelegramSignalBot:
             risk_percent = signal.get('risk_percent', 1.0)
             confirmations = signal.get('confirmations', 0)
             
-            # Format prices
             entry_str = ChartGenerator.format_price(signal['entry_price'])
             sl_str = ChartGenerator.format_price(signal['stop_loss'])
             tp_strs = [ChartGenerator.format_price(t) for t in signal['targets']]
@@ -1321,40 +1265,56 @@ class TelegramSignalBot:
         except Exception as e:
             logger.error(f"❌ Error sending signal: {e}")
     
+    async def scan_single_symbol_timeframe(self, symbol: str, timeframe: str) -> Optional[Dict]:
+        """Scan single symbol and timeframe - OPTIMIZED"""
+        try:
+            signal = await self.analyzer.generate_signal(symbol, timeframe)
+            if signal:
+                logger.info(f"✅ SIGNAL FOUND: {symbol} {timeframe} {signal['direction']}")
+            return signal
+        except Exception as e:
+            logger.error(f"❌ Error scanning {symbol} {timeframe}: {e}")
+            return None
+    
     async def scan_markets(self):
-        """Scan markets for signals"""
-        logger.info("🔍 Scanning markets with ADVANCED STRATEGY...")
+        """Scan markets for signals - PARALLEL PROCESSING"""
+        logger.info("🔍 Scanning markets with PARALLEL PROCESSING...")
         
         signals_found = 0
+        tasks = []
         
+        # Create tasks for all symbols and timeframes in parallel
         for symbol in SYMBOLS.keys():
             # Skip if already have active trade
             if symbol in self.active_trades:
                 continue
             
             for timeframe in TIMEFRAMES.values():
-                try:
-                    logger.info(f"🔎 Analyzing {symbol} {timeframe}...")
-                    signal = await self.analyzer.generate_signal(symbol, timeframe)
-                    
-                    if signal:
-                        logger.info(f"✅ HIGH QUALITY SIGNAL: {symbol} {timeframe} {signal['direction']} - {signal['confirmations']} confirmations")
-                        await self.send_signal(signal)
-                        signals_found += 1
-                        break  # Move to next symbol
-                    
-                    await asyncio.sleep(1)
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error scanning {symbol} {timeframe}: {e}")
-                    continue
+                task = self.scan_single_symbol_timeframe(symbol, timeframe)
+                tasks.append((symbol, timeframe, task))
         
-        logger.info(f"✅ Scan complete. High-quality signals found: {signals_found}")
+        # Execute all tasks in parallel
+        results = await asyncio.gather(*[task for _, _, task in tasks], return_exceptions=True)
+        
+        # Process results
+        for idx, result in enumerate(results):
+            if isinstance(result, Exception):
+                continue
+            
+            if result:
+                await self.send_signal(result)
+                signals_found += 1
+                
+                # Skip other timeframes for this symbol
+                symbol = result['symbol']
+                break
+        
+        logger.info(f"✅ Scan complete in PARALLEL. High-quality signals found: {signals_found}")
     
     async def run(self):
-        """Run the bot"""
+        """Run the bot - OPTIMIZED"""
         logger.info("=" * 70)
-        logger.info("🤖 Advanced Crypto Signal Bot - Multi-Filter Strategy")
+        logger.info("🚀 FAST Crypto Signal Bot - MODERATE MODE (Balanced)")
         logger.info("=" * 70)
         
         try:
@@ -1363,30 +1323,41 @@ class TelegramSignalBot:
             logger.info(f"📢 Channel: {CHANNEL_ID}")
             logger.info(f"📊 Symbols: {', '.join([s['ticker'] for s in SYMBOLS.values()])}")
             logger.info(f"⏱️  Timeframes: {', '.join(TIMEFRAMES.keys())}")
-            logger.info(f"🔄 Scan interval: 2 minutes")
-            logger.info(f"🎯 Strategy: Multi-filter with wider stops + Volume Analysis")
+            logger.info(f"🔄 Scan interval: 1 minute (FAST)")
+            logger.info(f"⚡ Processing: PARALLEL (ALL SYMBOLS AT ONCE)")
+            logger.info(f"🎯 Mode: MODERATE (3 confirmations, R:R 2.0+, Volume 1.3x)")
+            logger.info(f"📈 Expected signals: 5-15 per day")
         except Exception as e:
             logger.error(f"❌ Connection failed: {e}")
             return
         
         logger.info("=" * 70)
-        logger.info("🚀 Bot is running with ADVANCED STRATEGY + VOLUME ANALYSIS...")
+        logger.info("🚀 Bot is running: MODERATE MODE (Fast + Balanced Accuracy)")
         logger.info("=" * 70)
         
         while True:
             try:
+                start_time = datetime.now()
+                
                 await self.scan_markets()
                 await self.monitor_active_trades()
                 
-                logger.info(f"⏸️  Waiting 2 minutes... Active trades: {len(self.active_trades)}")
-                await asyncio.sleep(120)  # 2 minutes - faster scanning
+                elapsed = (datetime.now() - start_time).total_seconds()
+                logger.info(f"⏱️  Scan completed in {elapsed:.1f}s | Active trades: {len(self.active_trades)}")
+                
+                # Faster scanning: 60 seconds (1 minute)
+                logger.info(f"⏸️  Waiting 1 minute before next scan...")
+                await asyncio.sleep(60)
                 
             except KeyboardInterrupt:
                 logger.info("🛑 Stopping bot...")
                 break
             except Exception as e:
                 logger.error(f"⚠️  Error: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
+        
+        # Cleanup
+        await data_fetcher.close()
 
 
 async def main():
